@@ -1,3 +1,4 @@
+#include <libjailbreak/roothider.h>
 #include <libjailbreak/jbserver.h>
 #include <mach/mach.h>
 #include <bsm/audit.h>
@@ -5,7 +6,7 @@
 #include <sys/proc_info.h>
 extern int fileport_makefd (mach_port_t port);
 
-int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, char **bootUUIDOut, char **sandboxExtensionsOut, bool *fullyDebuggedOut, bool *forceCSAdhocOut);
+int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, char **bootUUIDOut, char **sandboxExtensionsOut, bool *fullyDebuggedOut);
 int systemwide_fork_fix(audit_token_t *parentToken, uint64_t childPid);
 int systemwide_trust_file(audit_token_t *processToken, int rfd, struct siginfo *siginfo, size_t siginfoSize, bool attach);
 
@@ -44,11 +45,13 @@ int jbserver_send_mach_reply(mach_msg_header_t *hdr, void *replyData)
 
 int jbserver_received_mach_message(audit_token_t *auditToken, struct jbserver_mach_msg *jbsMachMsg)
 {
+	JBLogDebug("jbserver received mach message(%d) from (%d) %s", jbsMachMsg->action, audit_token_to_pid(*auditToken), proc_get_path(audit_token_to_pid(*auditToken),NULL));
+
 	int r = -1;
 
 	// Anything implemented by the mach server is provided systemwide
 	// So we also need to honor the allowed handler of the systemwide domain
-	if (!systemwide_domain_allowed(*auditToken)) return -1;
+	if (!roothide_domain_allowed(*auditToken)) return -1;
 
 	uint64_t msgSize = jbsMachMsg->hdr.msgh_size;
 	void *replyData = NULL;
@@ -64,7 +67,7 @@ int jbserver_received_mach_message(audit_token_t *auditToken, struct jbserver_ma
 		
 		char *jbRootPath = NULL, *bootUUID = NULL, *sandboxExtensions = NULL;
 		bool fullyDebugged = false;
-		int result = systemwide_process_checkin(auditToken, &jbRootPath, &bootUUID, &sandboxExtensions, &reply->fullyDebugged, &reply->forceCSAdhoc);
+		int result = systemwide_process_checkin(auditToken, &jbRootPath, &bootUUID, &sandboxExtensions, &reply->fullyDebugged);
 
 		reply->base.msg.magic         = jbsMachMsg->magic;
 		reply->base.msg.action        = jbsMachMsg->action;
@@ -120,50 +123,6 @@ int jbserver_received_mach_message(audit_token_t *auditToken, struct jbserver_ma
 		reply->base.msg.hdr.msgh_size = replySize;
 
 		reply->base.status = result;
-		r = 0;
-	}
-	else if (jbsMachMsg->action == JBSERVER_MACH_HOOKD_SEND_MSG) {
-		if (msgSize < sizeof(struct jbserver_mach_msg_hookd_send_msg)) return -1;
-		if (msgSize > (sizeof(struct jbserver_mach_msg_hookd_send_msg) + HOOKD_MSG_MAX_SIZE)) return -1;
-		
-		struct jbserver_mach_msg_hookd_send_msg *hookdMsgToRedirect = (struct jbserver_mach_msg_hookd_send_msg *)jbsMachMsg;
-		struct hookd_mach_msg *hookdMsg = (struct hookd_mach_msg *)&hookdMsgToRedirect->hookdMsg[0];
-		if ((hookdMsg->hdr.msgh_size + offsetof(struct jbserver_mach_msg_hookd_send_msg, hookdMsg)) > msgSize) return -1;
-
-		size_t hookdMsgSize = hookdMsg->hdr.msgh_size;
-		
-		// Make sure message header is clean except for the size
-		memset(&hookdMsg->hdr, 0, sizeof(hookdMsg->hdr));
-		hookdMsg->hdr.msgh_size = hookdMsgSize;
-
-		// Always set clientPid to the correct value
-		hookdMsg->clientPid = audit_token_to_pid(*auditToken);
-
-		size_t hookdReplySize = HOOKD_MSG_MAX_SIZE + MAX_TRAILER_SIZE;
-		uint8_t hookdReplyBuf[hookdReplySize];
-		memset(hookdReplyBuf, 0, sizeof(hookdReplyBuf));
-		struct hookd_mach_msg_reply *hookdReply = (struct hookd_mach_msg_reply *)hookdReplyBuf;
-		hookdReply->hdr.msgh_size = hookdReplySize;
-
-		int result = hookd_send_msg(hookdMsg, hookdReply);
-
-		size_t replySize = sizeof(struct jbserver_mach_msg_hookd_send_msg_reply);
-		if (result == 0) {
-			replySize += hookdReply->hdr.msgh_size;
-		}
-		replyData = malloc(replySize);
-		memset(replyData, 0, replySize);
-		struct jbserver_mach_msg_hookd_send_msg_reply *reply = (struct jbserver_mach_msg_hookd_send_msg_reply *)replyData;
-		if (result == 0) {
-			memcpy(reply->hookdReply, hookdReply, hookdReply->hdr.msgh_size);
-		}
-
-		reply->base.msg.magic         = jbsMachMsg->magic;
-		reply->base.msg.action        = jbsMachMsg->action;
-		reply->base.msg.hdr.msgh_size = replySize;
-
-		reply->base.status = result;
-
 		r = 0;
 	}
 

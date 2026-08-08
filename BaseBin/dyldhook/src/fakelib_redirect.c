@@ -1,3 +1,5 @@
+#if 0
+
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -19,8 +21,6 @@
 // This way the vnode will not be on /usr/lib mount and the /usr/lib mount therefore can be unmounted without making stuff crash
 // There are a few rare edge cases of processes that cannot access /var/jb/basebin/.fakelib for some reason, so we need to make sure those still go over /usr/lib
 
-#if IOS < 18
-
 extern void *ORIG(_ZN5dyld44APIs11dlopen_fromEPKciPv)(uintptr_t self, const char* path, int mode, void* addressInCaller);
 void *HOOK(_ZN5dyld44APIs11dlopen_fromEPKciPv)(uintptr_t self, const char* path, int mode, void* addressInCaller)
 {
@@ -36,9 +36,9 @@ void *HOOK(_ZN5dyld44APIs11dlopen_fromEPKciPv)(uintptr_t self, const char* path,
 
 					size_t redirPathSize = strlen(suffix) + strlen(middle) + strlen(jbroot) + 1;
 					char redirPath[redirPathSize];
-					strlcpy(redirPath, jbroot, redirPathSize);
-					strlcat(redirPath, middle, redirPathSize);
-					strlcat(redirPath, suffix, redirPathSize);
+					strcpy(redirPath, jbroot);
+					strcat(redirPath, middle);
+					strcat(redirPath, suffix);
 
 					void *handle = ORIG(_ZN5dyld44APIs11dlopen_fromEPKciPv)(self, redirPath, mode, addressInCaller);
 					if (handle) return handle;
@@ -51,5 +51,4 @@ void *HOOK(_ZN5dyld44APIs11dlopen_fromEPKciPv)(uintptr_t self, const char* path,
 
 	return ORIG(_ZN5dyld44APIs11dlopen_fromEPKciPv)(self, path, mode, addressInCaller);
 }
-
 #endif

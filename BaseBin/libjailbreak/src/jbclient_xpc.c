@@ -9,6 +9,14 @@
 #include <dlfcn.h>
 #include <os/alloc_once_private.h>
 
+#include "roothider/log.h"
+#ifdef ENABLE_LOGS
+void (*XPCLogDebugFunction)(const char *format, ...);
+void (*XPCLogErrorFunction)(const char *format, ...);
+#define JBLogDebug(...) do { if(XPCLogDebugFunction)XPCLogDebugFunction(__VA_ARGS__); } while(0)
+#define JBLogError(...) do { if(XPCLogErrorFunction)XPCLogErrorFunction(__VA_ARGS__); } while(0)
+#endif
+
 struct xpc_global_data {
 	uint64_t    a;
 	uint64_t    xpc_flags;
@@ -148,7 +156,7 @@ int jbclient_trust_file_by_path(const char *path)
 	return r;
 }
 
-int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sandboxExtensionsOut, bool *fullyDebuggedOut, bool *forceCSAdhocOut)
+int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sandboxExtensionsOut, bool *fullyDebuggedOut)
 {
 	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_SYSTEMWIDE, JBS_SYSTEMWIDE_PROCESS_CHECKIN, NULL);
 	if (xreply) {
@@ -160,7 +168,6 @@ int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sand
 		if (bootUUIDOut) *bootUUIDOut = bootUUID ? strdup(bootUUID) : NULL;
 		if (sandboxExtensionsOut) *sandboxExtensionsOut = sandboxExtensions ? strdup(sandboxExtensions) : NULL;
 		if (fullyDebuggedOut) *fullyDebuggedOut = xpc_dictionary_get_bool(xreply, "fully-debugged");
-		if (forceCSAdhocOut) *forceCSAdhocOut = xpc_dictionary_get_bool(xreply, "force-cs-adhoc");
 		xpc_release(xreply);
 		return result;
 	}
@@ -247,22 +254,6 @@ double jbclient_jbsettings_get_double(const char *key)
 	return 0;
 }
 
-int jbclient_persona_fix(int childPid, uid_t overwriteUid, gid_t overwriteGid)
-{
-	xpc_object_t xargs = xpc_dictionary_create_empty();
-	xpc_dictionary_set_uint64(xargs, "child-pid", childPid);
-	xpc_dictionary_set_uint64(xargs, "overwrite-uid", overwriteUid);
-	xpc_dictionary_set_uint64(xargs, "overwrite-gid", overwriteGid);
-	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_SYSTEMWIDE, JBS_SYSTEMWIDE_PERSONA_FIX, xargs);
-	xpc_release(xargs);
-	if (xreply) {
-		int result = xpc_dictionary_get_int64(xreply, "result");
-		xpc_release(xreply);
-		return result;
-	}
-	return -1;
-}
-
 int jbclient_platform_set_process_debugged(uint64_t pid, bool fullyDebugged)
 {
 	xpc_object_t xargs = xpc_dictionary_create_empty();
@@ -334,6 +325,7 @@ int jbclient_platform_jbsettings_set_double(const char *key, double doubleValue)
 	return r;
 }
 
+/*
 int jbclient_platform_set_systemwide_domain_enabled(bool enabled)
 {
 	xpc_object_t xargs = xpc_dictionary_create_empty();
@@ -347,6 +339,7 @@ int jbclient_platform_set_systemwide_domain_enabled(bool enabled)
 	}
 	return -1;
 }
+*/
 
 int jbclient_watchdog_intercept_userspace_panic(const char *panicMessage)
 {
@@ -465,6 +458,7 @@ int jbclient_root_trustcache_info(xpc_object_t *infoOut)
 	return -1;
 }
 
+/*
 int jbclient_root_trustcache_add_cdhash(uint8_t *cdhashData, size_t cdhashLen)
 {
 	xpc_object_t xargs = xpc_dictionary_create_empty();
@@ -478,6 +472,7 @@ int jbclient_root_trustcache_add_cdhash(uint8_t *cdhashData, size_t cdhashLen)
 	}
 	return -1;
 }
+*/
 
 int jbclient_root_trustcache_clear(void)
 {
@@ -497,43 +492,6 @@ int jbclient_boomerang_done(void)
 		int64_t result = xpc_dictionary_get_int64(xreply, "result");
 		xpc_release(xreply);
 		return result;
-	}
-	return -1;
-}
-
-bool jbclient_dopamine_is_jailbroken(char **version)
-{
-	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_DOPAMINE, JBS_DOPAMINE_IS_JAILBROKEN, NULL);
-	if (xreply) {
-		int64_t result = xpc_dictionary_get_int64(xreply, "result");
-		const char *receivedVersion = xpc_dictionary_get_string(xreply, "version");
-		if (receivedVersion && version) {
-			*version = strdup(receivedVersion);
-		}
-		xpc_release(xreply);
-		return (bool)result;
-	}
-	return false;
-}
-
-int jbclient_dopamine_get_root(void)
-{
-	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_DOPAMINE, JBS_DOPAMINE_GET_ROOT, NULL);
-	if (xreply) {
-		int64_t result = xpc_dictionary_get_int64(xreply, "result");
-		xpc_release(xreply);
-		return (bool)result;
-	}
-	return -1;
-}
-
-int jbclient_dopamine_drop_root(void)
-{
-	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_DOPAMINE, JBS_DOPAMINE_DROP_ROOT, NULL);
-	if (xreply) {
-		int64_t result = xpc_dictionary_get_int64(xreply, "result");
-		xpc_release(xreply);
-		return (bool)result;
 	}
 	return -1;
 }

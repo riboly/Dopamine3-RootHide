@@ -84,17 +84,9 @@
 /*Theme*/
 /*Kernel Exploit*/
 /*PPL Bypass*/
-/*SPTM Bypass*/
 /*PAC Bypass*/
 /*None*/
 /*Recommended*/
-
-// DarkSword Workaround
-/*Respring_Required*/
-/*Respring_Required_Message*/
-/*Respring_Required_Notice_A8*/
-/*Apply_Workaround*/
-/*Respring_Cancel*/
 
 // Credits
 "Credits_Button_Discord" = "Discord";
@@ -115,7 +107,6 @@
 /*Exploiting Kernel (%@)*/
 /*Bypassing PAC (%@)*/
 /*Bypassing PPL (%@)*/
-/*Bypassing SPTM (%@)*/
 
 // Package Manager selection
 "Status_Title_Select_Package_Managers" = "Пакет менеджерін таңдаңыз";

@@ -13,14 +13,23 @@
 
 CFTypeRef MGCopyAnswer(CFStringRef str);
 
-int drawctx_update(struct drawctx *d)
+struct display {
+	bool inited;
+	void *base;
+	IOMobileFramebufferDisplaySize size;
+	int bytesPerRow;
+	IOMobileFramebufferRef display;
+	IOSurfaceRef surface;
+} gDisplay;
+
+int display_update(void)
 {
-	if (!d || !d->framebuffer) return -1;
+	if (!gDisplay.display) return -1;
 
 	int token;
-	IOMobileFramebufferSwapBegin(d->framebuffer, &token);
-	IOMobileFramebufferSwapSetLayer(d->framebuffer, 0, d->surface, (CGRect){ { 0, 0 }, { d->size.width, d->size.height } }, (CGRect){ { 0, 0 }, { d->size.width, d->size.height } }, 0);
-	return IOMobileFramebufferSwapEnd(d->framebuffer);
+	IOMobileFramebufferSwapBegin(gDisplay.display, &token);
+	IOMobileFramebufferSwapSetLayer(gDisplay.display, 0, gDisplay.surface, (CGRect){ { 0, 0 }, { gDisplay.size.width, gDisplay.size.height } }, (CGRect){ { 0, 0 }, { gDisplay.size.width, gDisplay.size.height } }, 0);
+	return IOMobileFramebufferSwapEnd(gDisplay.display);
 }
 
 IOMobileFramebufferReturn find_target_display(IOMobileFramebufferRef *pointer)
@@ -75,28 +84,27 @@ IOSurfaceRef create_iosurface_for_display(IOMobileFramebufferDisplaySize size, u
 	return IOSurfaceCreate((__bridge CFDictionaryRef)properties);
 }
 
-int drawctx_init_internal(struct drawctx *ctx, bool useDCPFlags)
+int display_init_internal(bool useDCPFlags)
 {
-	if (!ctx) return -1;
-	if (ctx->inited) return 0;
+	if (gDisplay.inited) return 0;
 
-	int r = find_target_display(&ctx->framebuffer);
+	int r = find_target_display(&gDisplay.display);
 	if (r) return r;
-	ctx->size = find_display_size();
+	gDisplay.size = find_display_size();
 
-	ctx->surface = create_iosurface_for_display(ctx->size, useDCPFlags ? kIOMapWriteCombineCache | kIOMapInhibitCache | kIOMapWriteThruCache | kIOMapCopybackCache : kIOMapWriteCombineCache);
+	gDisplay.surface = create_iosurface_for_display(gDisplay.size, useDCPFlags ? kIOMapWriteCombineCache | kIOMapInhibitCache | kIOMapWriteThruCache | kIOMapCopybackCache : kIOMapWriteCombineCache);
 
-	IOSurfaceLock(ctx->surface, 0, 0);
-	ctx->base = IOSurfaceGetBaseAddress(ctx->surface);
-	ctx->bytesPerRow = IOSurfaceGetBytesPerRow(ctx->surface);
-	IOSurfaceUnlock(ctx->surface, 0, 0);
+	IOSurfaceLock(gDisplay.surface, 0, 0);
+	gDisplay.base = IOSurfaceGetBaseAddress(gDisplay.surface);
+	gDisplay.bytesPerRow = IOSurfaceGetBytesPerRow(gDisplay.surface);
+	IOSurfaceUnlock(gDisplay.surface, 0, 0);
 
-	kern_return_t kr = drawctx_update(ctx);
+	kern_return_t kr = display_update();
 	if (kr == KERN_SUCCESS) {
-		ctx->inited = true;
+		gDisplay.inited = true;
 	}
 	else {
-		CFRelease(ctx->surface);
+		CFRelease(gDisplay.surface);
 		if (kr == kIOReturnBadMedia) {
 			return kIOReturnBadMedia;
 		}
@@ -105,37 +113,21 @@ int drawctx_init_internal(struct drawctx *ctx, bool useDCPFlags)
 	return 0;
 }
 
-struct drawctx *drawctx_init(void)
+int display_init(void)
 {
-	struct drawctx *ctx = malloc(sizeof(struct drawctx));
-	if (!ctx) return NULL;
-	bzero(ctx, sizeof(struct drawctx));
-
-	int r = drawctx_init_internal(ctx, false);
+	int r = display_init_internal(false);
 	if (r == kIOReturnBadMedia) {
-		r = drawctx_init_internal(ctx, true);
+		return display_init_internal(true);
 	}
-
-	if (r == 0) return ctx;
-
-	free(ctx);
-	return 0;
+	return r;
 }
 
-void drawctx_free(struct drawctx *ctx)
+int display_reset(void)
 {
-	if (ctx->surface) {
-		CFRelease(ctx->surface);
-	}
-	free(ctx);
-}
+	if (!gDisplay.base) return -1;
 
-int drawctx_reset(struct drawctx *ctx)
-{
-	if (!ctx || !ctx->base) return -1;
-
-	memset(ctx->base, 0, ctx->size.height * ctx->bytesPerRow);
-	drawctx_update(ctx);
+	memset(gDisplay.base, 0, gDisplay.size.height * gDisplay.bytesPerRow);
+	display_update();
 	return 0;
 }
 
@@ -247,17 +239,20 @@ int draw_image_to_buf_for_main_screen(CGImageRef image, void **bufOut, size_t *b
 	return draw_image_to_buf(image, find_display_size(), get_main_screen_rotation(), bufOut, bufSizeOut);
 }
 
-int drawctx_draw_raw_path(struct drawctx *ctx, const char *path)
+int display_draw_raw_path(const char *path)
 {
+	int retval = display_init();
+	if (retval) return retval;
+
 	bool worked = false;
 	int fd = open(path, O_RDONLY);
 	if (fd >= 0) {
 		struct stat s;
 		if (fstat(fd, &s) == 0) {
-			size_t displayBufSize = ctx->size.height * ctx->bytesPerRow;
+			size_t displayBufSize = gDisplay.size.height * gDisplay.bytesPerRow;
 			if (displayBufSize == s.st_size) {
 				worked = true;
-				read(fd, ctx->base, s.st_size);
+				read(fd, gDisplay.base, s.st_size);
 			}
 		}
 		close(fd);
@@ -265,7 +260,7 @@ int drawctx_draw_raw_path(struct drawctx *ctx, const char *path)
 
 	if (!worked) return -1;
 
-	return drawctx_update(ctx);
+	return display_update();
 }
 
 static CGImageRef load_image(const char *image_path)
@@ -374,17 +369,19 @@ int draw_image_path_to_buf_for_main_screen(const char* image_path, void **bufOut
 	return r;
 }
 
-int drawctx_draw_raw(struct drawctx *ctx, void *rawBuf, size_t rawBufSize)
+int display_draw_raw(void *rawBuf, size_t rawBufSize)
 {
-	size_t displayBufSize = ctx->size.height * ctx->bytesPerRow;
+	int retval = display_init();
+	if (retval) return retval;
+	size_t displayBufSize = gDisplay.size.height * gDisplay.bytesPerRow;
 	if (rawBufSize != displayBufSize) {
 		return -1;
 	}
-	memcpy(ctx->base, rawBuf, rawBufSize);
-	return drawctx_update(ctx);
+	memcpy(gDisplay.base, rawBuf, rawBufSize);
+	return display_update();
 }
 
-int drawctx_draw_image_path(struct drawctx *ctx, const char* image_path)
+int display_draw_image_path(const char* image_path)
 {
 	int retval = -1;
 
@@ -392,12 +389,12 @@ int drawctx_draw_image_path(struct drawctx *ctx, const char* image_path)
 	size_t bufSize = 0;
 	retval = draw_image_path_to_buf_for_main_screen(image_path, &buf, &bufSize);
 	if (retval) return retval;
-	retval = drawctx_draw_raw(ctx, buf, bufSize);
+	retval = display_draw_raw(buf, bufSize);
     free(buf);
 	return retval;
 }
 
-int drawctx_draw_image(struct drawctx *ctx, CGImageRef cgImage)
+int display_draw_image(CGImageRef cgImage)
 {
 	int retval = -1;
 
@@ -405,7 +402,7 @@ int drawctx_draw_image(struct drawctx *ctx, CGImageRef cgImage)
 	size_t bufSize = 0;
 	retval = draw_image_to_buf_for_main_screen(cgImage, &buf, &bufSize);
 	if (retval) return retval;
-	retval = drawctx_draw_raw(ctx, buf, bufSize);
+	retval = display_draw_raw(buf, bufSize);
     free(buf);
 	return retval;
 }

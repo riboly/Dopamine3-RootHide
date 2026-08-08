@@ -9,11 +9,9 @@ struct dyld_jbinfo {
 	char *bootUUID;
 	char *sandboxExtensions;
 	bool fullyDebugged;
-	bool forceCSAdhoc;
 
 	char data[];
 };
 
 extern bool jbinfo_is_checked_in(void);
 extern char *jbinfo_get_jbroot(void);
-extern bool jbinfo_should_force_cs_adhoc(void);

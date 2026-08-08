@@ -10,15 +10,7 @@
 #import <pthread.h>
 #import <sys/sysctl.h>
 #import <substrate.h>
-#include <sys/param.h>
-#include <sys/mount.h>
-#include <kern_memorystatus.h>
 
-#import "hookd_provider.h"
-#import <libjailbreak/hookd.h>
-#import <litehook.h>
-#import "../systemhook/src/common/common.h"
-#import "../systemhook/src/common/hookd_external.h"
 #import "spawn_hook.h"
 #import "xpc_hook.h"
 #import "daemon_hook.h"
@@ -32,7 +24,11 @@
 
 bool gInEarlyBoot = true;
 
-void abort_with_reason(uint32_t reason_namespace, uint64_t reason_code, const char *reason_string, uint64_t reason_flags);
+//void abort_with_reason(uint32_t reason_namespace, uint64_t reason_code, const char *reason_string, uint64_t reason_flags);
+#define abort_with_reason(reason_namespace,reason_code,reason_string,reason_flags)  launchd_panic("%s",reason_string)
+void roothide_launchd_preinit();
+void roothide_launchd_postinit(bool firstLoad);
+
 extern void systemwide_domain_set_enabled(bool enabled);
 
 // Boot logo drawing invokes some IOKit stuff that seems to initialize os_log / asl
@@ -46,38 +42,37 @@ void exec_with_asl_disabled(void (^block)(void))
 	aslCtx->asl_enabled = true;
 }
 
-struct drawctx *gBootLogoDrawCtx = NULL;
-bool gFreeBootLogoBeforeBackboardd = NO;
-
 void draw_boot_logo(const char *bootLogoPath)
 {
-	exec_with_asl_disabled(^{
-		if (!gBootLogoDrawCtx) {
-			gBootLogoDrawCtx = drawctx_init();
+	if (bootLogoPath) {
+		if (!access(bootLogoPath, R_OK)) {
+			// When launchd tears down the userspace, it will do so in no particular order
+			// If SpringBoard gets unloaded before backboardd, backboardd will draw a spinning wheel to the framebuffer
+			// If this happens after we wrote the boot logo to the framebuffer, it will be replaced by that
+			// Therefore, we kill backboardd early so that this race does not happen
+			killall("/usr/libexec/backboardd", SIGTERM);
+			exec_with_asl_disabled(^{
+				display_draw_image_path(bootLogoPath);
+			});
 		}
-
-		if (bootLogoPath) {
-			if (!access(bootLogoPath, R_OK)) {
-				// When launchd tears down the userspace, it will do so in no particular order
-				// If SpringBoard gets unloaded before backboardd, backboardd will draw a spinning wheel to the framebuffer
-				// If this happens after we wrote the boot logo to the framebuffer, it will be replaced by that
-				// Therefore, we kill backboardd early so that this race does not happen
-				killall("/usr/libexec/backboardd", SIGTERM);
-				drawctx_draw_image_path(gBootLogoDrawCtx, bootLogoPath);
-			}
-		}
-	});
-}
-
-void free_boot_logo(void)
-{
-	drawctx_free(gBootLogoDrawCtx);
-	gBootLogoDrawCtx = NULL;
+	}
 }
 
 int (*sysctlbyname_orig)(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) = NULL;
 int sysctlbyname_hook(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 {
+/*********************** roothide specific ********************/
+#ifdef __arm64e__
+	if (!__builtin_available(iOS 16.0, *))
+	{
+		if (strcmp(name, "vm.shared_region_pivot") == 0) {
+			return 0;
+		}
+	}
+#endif
+/*************************************************************/
+
+
 	int r = sysctlbyname_orig(name, oldp, oldlenp, newp, newlen);
 	if (!strcmp(name, "kern.willuserspacereboot")) {
 		draw_boot_logo(JBROOT_PATH("/basebin/bootlogo.jp2"));
@@ -88,6 +83,10 @@ int sysctlbyname_hook(const char *name, void *oldp, size_t *oldlenp, void *newp,
 __attribute__((constructor)) static void initializer(void)
 {
 	crashreporter_start();
+
+/********** roothide specfic ********/
+	roothide_launchd_preinit();
+/********** roothide specfic ********/
 
 	// Retrieve jbroot path early based on our dylib path (<JBROOT>/basebin/launchd) so we can use JBROOT_PATH before boomerang_recoverPrimitives
 	@autoreleasepool {
@@ -122,8 +121,9 @@ __attribute__((constructor)) static void initializer(void)
 			remove("/var/mobile/Library/Preferences/com.apple.NanoRegistry.NRLaunchNotificationController.volatile.plist");
 		}
 
+/*********************** roothide specific ********************
 		draw_boot_logo(JBROOT_PATH("/basebin/bootlogo.jp2"));
-		gFreeBootLogoBeforeBackboardd = YES;
+/*********************** roothide specific ********************/
 	}
 	else {
 		// Here we should have been injected into a live launchd on the fly
@@ -148,23 +148,14 @@ __attribute__((constructor)) static void initializer(void)
 
 	cs_allow_invalid(proc_self(), false);
 
-	if (__builtin_available(iOS 19.0, *)) {
-		// On iOS 26+, hooks have to be applied through hookd
-		hookd_provider_init();
-		litehook_hook_memory = litehook_hook_memory_hookd;
-		litehook_hook_function(mach_vm_protect, mach_vm_protect_fixed);
-		init_hookd_external_support();
-	}
-
 	initXPCHooks();
 	initDaemonHooks();
 	initSpawnHooks();
 	initIPCHooks();
 	initJetsamHook();
+	MSHookFunction((void *)sysctlbyname, (void *)sysctlbyname_hook, (void **)&sysctlbyname_orig);
 
-	sysctlbyname_orig = sysctlbyname;
-	litehook_rebind_symbol(LITEHOOK_REBIND_GLOBAL, (void *)sysctlbyname, (void *)sysctlbyname_hook, NULL);
-
+/*
 	if (getenv("DOPAMINE_IS_HIDDEN") != 0) {
 		// If the jailbreak is currently hidden, fakelib had to be mounted again before the userspace reboot
 		// Now that the userspace reboot is over, we can unmount it again
@@ -181,6 +172,7 @@ __attribute__((constructor)) static void initializer(void)
 		// No need to keep this around
 		unsetenv("DOPAMINE_IS_HIDDEN");
 	}
+*/
 
 	// This will ensure launchdhook is always reinjected after userspace reboots
 	// As this launchd will pass environ to the next launchd...
@@ -192,4 +184,8 @@ __attribute__((constructor)) static void initializer(void)
 	// Set an identifier that uniquely identifies this userspace boot
 	// Part of rootless v2 spec
 	setenv("LAUNCHD_UUID", [NSUUID UUID].UUIDString.UTF8String, 1);
+
+/********** roothide specfic ********/
+roothide_launchd_postinit(firstLoad);
+/********** roothide specfic ********/
 }

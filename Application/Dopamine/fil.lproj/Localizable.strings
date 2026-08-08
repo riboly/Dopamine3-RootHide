@@ -84,17 +84,9 @@
 "Theme" = "Mga Theme";
 "Kernel Exploit" = "Mga Kernel Exploit";
 "PPL Bypass" = "PPL Bypass";
-"SPTM Bypass" = "SPTM Bypass";
 "PAC Bypass" = "PAC Bypass";
 /*None*/
 /*Recommended*/
-
-// DarkSword Workaround
-/*Respring_Required*/
-/*Respring_Required_Message*/
-/*Respring_Required_Notice_A8*/
-/*Apply_Workaround*/
-/*Respring_Cancel*/
 
 // Credits
 "Credits_Button_Discord" = "Discord";
@@ -114,8 +106,7 @@
 "Patchfinding" = "Patchfinding";
 "Exploiting Kernel (%@)" = "Ini-Exploit ang Kernel";
 "Bypassing PAC (%@)" = "Bina-Bypass ang PAC (%@)";
-"Bypassing PPL (%@)" = "Bina-Bypass ang PPL (%@)";
-"Bypassing SPTM (%@)" = "Bina-Bypass ang SPTM (%@)";
+"Bypassing PPL (%@)" = "Bina-Bypass ang PPL";
 
 // Package Manager selection
 "Status_Title_Select_Package_Managers" = "Pumili ng mga Package Manager(s)";

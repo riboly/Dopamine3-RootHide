@@ -13,38 +13,28 @@ NS_ASSUME_NONNULL_BEGIN
 @interface DOEnvironmentManager : NSObject
 {
     DOBootstrapper *_bootstrapper;
-    BOOL _isJailbroken;
-    NSString *_jailbrokenVersion;
     BOOL _bootstrapNeedsMigration;
 }
 
 + (instancetype)sharedManager;
 
+@property (nonatomic, readonly) NSData *bootManifestHash;
+
 - (NSString *)appVersion;
 - (NSString *)appVersionDisplayString;
 - (NSString *)nightlyHash;
 
-- (NSString *)privatePrebootPath;
-- (NSString *)activePrebootPath;
-
 - (BOOL)isInstalledThroughTrollStore;
 - (BOOL)isJailbroken;
-- (BOOL)isJailbrokenWithOtherJailbreak;
 - (BOOL)isBootstrapped;
 - (NSString *)jailbrokenVersion;
-- (NSString *)systemVersion;
 
 - (BOOL)isSupported;
 - (BOOL)isArm64e;
-- (BOOL)isSPTM;
 - (NSString *)versionSupportString;
 - (NSString *)accessibleKernelPath;
-- (NSString *)accessibleSPTMPath;
-- (NSString *)accessibleTXMPath;
 - (void)locateJailbreakRoot;
 - (NSError *)ensureJailbreakRootExists;
-
-- (void)setJailbroken:(BOOL)jailbroken withVersion:(NSString *)version;
 
 
 - (void)runUnsandboxed:(void (^)(void))unsandboxBlock;
@@ -63,11 +53,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)isIDownloadEnabled;
 - (void)setIDownloadEnabled:(BOOL)enabled needsUnsandbox:(BOOL)needsUnsandbox;
 - (void)setIDownloadLoaded:(BOOL)loaded needsUnsandbox:(BOOL)needsUnsandbox;
+/*
 - (BOOL)isFakelibMounted;
 - (int)setFakelibMounted:(BOOL)mounted;
 - (int)setPrivatePrebootProtected:(BOOL)protected;
 - (BOOL)isJailbreakHidden;
 - (void)setJailbreakHidden:(BOOL)hidden;
+*/
 
 - (BOOL)isPACBypassRequired;
 - (BOOL)isPPLBypassRequired;

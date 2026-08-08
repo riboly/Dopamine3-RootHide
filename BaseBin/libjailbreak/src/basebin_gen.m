@@ -1,39 +1,8 @@
 #import "libjailbreak.h"
 #import "carboncopy.h"
 #import "codesign.h"
-#import "util.h"
 #import <Foundation/Foundation.h>
 #import <sys/sysctl.h>
-
-
-NSString *dyldhook_dylib_for_platform(void)
-{
-	cpu_subtype_t cpusubtype = 0;
-	size_t len = sizeof(cpusubtype);
-	if (sysctlbyname("hw.cpusubtype", &cpusubtype, &len, NULL, 0) == -1) { return nil; }
-	if ((cpusubtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E) {
-		if (@available(iOS 18.0, *)) {
-			return @"dyldhook_merge.arm64e.iOS18+.dylib"; 
-		}
-		else if (@available(iOS 16.0, *)) {
-			return @"dyldhook_merge.arm64e.iOS16-17.dylib"; 
-		}
-		else {
-			return @"dyldhook_merge.arm64e.iOS15.dylib"; 
-		}
-	}
-	else {
-		if (@available(iOS 18.0, *)) {
-			return @"dyldhook_merge.arm64.iOS18+.dylib"; 
-		}
-		else if (@available(iOS 16.0, *)) {
-			return @"dyldhook_merge.arm64.iOS16-17.dylib"; 
-		}
-		else {
-			return @"dyldhook_merge.arm64.iOS15.dylib"; 
-		}
-	}
-}
 
 int apply_dyld_patch(NSString *dyldPath, const char *newUUIDPrefix)
 {
@@ -87,16 +56,30 @@ int apply_dyld_patch(NSString *dyldPath, const char *newUUIDPrefix)
 	return r;
 }
 
-int merge_dyldhook(NSString *originalDyldPath, NSString *dyldhookMergeDylibPath, NSString *outPath)
+NSString *dyldhook_dylib_for_platform(void)
 {
-	int r = exec_cmd(JBROOT_PATH("/basebin/MachOMerger"), originalDyldPath.fileSystemRepresentation, dyldhookMergeDylibPath.fileSystemRepresentation, outPath.fileSystemRepresentation, NULL);
-	if (r == 0) {
-		r = chmod(outPath.fileSystemRepresentation, 0755);
+	cpu_subtype_t cpusubtype = 0;
+	size_t len = sizeof(cpusubtype);
+	if (sysctlbyname("hw.cpusubtype", &cpusubtype, &len, NULL, 0) == -1) { return nil; }
+	if ((cpusubtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E) {
+		if (@available(iOS 16.0, *)) {
+			return @"dyldhook_merge.arm64e.dylib"; 
+		}
+		else {
+			return @"dyldhook_merge.arm64e.iOS15.dylib"; 
+		}
 	}
-	return r;
+	else {
+		if (@available(iOS 16.0, *)) {
+			return @"dyldhook_merge.arm64.dylib"; 
+		}
+		else {
+			return @"dyldhook_merge.arm64.iOS15.dylib"; 
+		}
+	}
 }
 
-int basebin_generate_internal(NSString *originUsrLibPath, NSString *basebinPath, NSString *targetBasebinPath, bool comingFromJBUpdate)
+int merge_dyldhook(NSString *originalDyldPath, NSString *outPath)
 {
 	NSString *dyldhookMergeDylibName = dyldhook_dylib_for_platform();
 	if (!dyldhookMergeDylibName) {
@@ -104,53 +87,58 @@ int basebin_generate_internal(NSString *originUsrLibPath, NSString *basebinPath,
 		return -1;
 	}
 
-	NSString *dyldPath               = [originUsrLibPath stringByAppendingPathComponent:@"dyld"];
+	NSString *dyldhookMergeDylibPath = [JBROOT_PATH(@"/basebin") stringByAppendingPathComponent:dyldhookMergeDylibName];
+	int r = exec_cmd(JBROOT_PATH("/basebin/MachOMerger"), originalDyldPath.fileSystemRepresentation, dyldhookMergeDylibPath.fileSystemRepresentation, outPath.fileSystemRepresentation, NULL);
+	if (r == 0) {
+		r = chmod(outPath.fileSystemRepresentation, 0755);
+	}
+	return r;
+}
 
-	NSString *genPath                = [basebinPath stringByAppendingPathComponent:@"gen"];
-	NSString *fakelibPath            = [basebinPath stringByAppendingPathComponent:@".fakelib"];
-	NSString *versionPath            = [basebinPath stringByAppendingPathComponent:@".version"];
-	NSString *dyldhookMergeDylibPath = [basebinPath stringByAppendingPathComponent:dyldhookMergeDylibName];
+int basebin_generate(bool comingFromJBUpdate)
+{
+	NSString *basebinPath    = JBROOT_PATH(@"/basebin");
+	NSString *genPath        = JBROOT_PATH(@"/basebin/gen");
+	NSString *fakelibPath    = JBROOT_PATH(@"/basebin/.fakelib");
+	NSString *systemhookPath = JBROOT_PATH(@"/basebin/systemhook.dylib");
+
+	[[NSFileManager defaultManager] createDirectoryAtPath:genPath withIntermediateDirectories:YES attributes:nil error:nil];
 
 	NSString *fakelibDyldPath        = [fakelibPath stringByAppendingPathComponent:@"dyld"];
 	NSString *fakelibSystemHookPath  = [fakelibPath stringByAppendingPathComponent:@"systemhook.dylib"];
 
-	NSString *dyldOrigPath           = [genPath stringByAppendingPathComponent:@"dyld.orig"];
-	NSString *dyldInflightPath       = [genPath stringByAppendingPathComponent:@"dyld.inflight"];
-	NSString *dyldOldPath            = [genPath stringByAppendingPathComponent:@"dyld.old"];
-	NSString *dyldPatchedPath        = [genPath stringByAppendingPathComponent:@"dyld"];
+	NSString *dyldOrigPath     = [genPath stringByAppendingPathComponent:@"dyld.orig"];
+	NSString *dyldInflightPath = [genPath stringByAppendingPathComponent:@"dyld.inflight"];
+	NSString *dyldOldPath      = [genPath stringByAppendingPathComponent:@"dyld.old"];
+	NSString *dyldPatchedPath  = [genPath stringByAppendingPathComponent:@"dyld"];
 
-	NSString *targetDyldPath         = [targetBasebinPath stringByAppendingPathComponent:@"gen/dyld"];
-	NSString *targetSystemhookPath   = [targetBasebinPath stringByAppendingPathComponent:@"systemhook.dylib"];
-	
-	NSString *dopamineVersion = [NSString stringWithContentsOfFile:versionPath encoding:NSUTF8StringEncoding error:nil];
+	NSString *dopamineVersion = [NSString stringWithContentsOfFile:JBROOT_PATH(@"/basebin/.version") encoding:NSUTF8StringEncoding error:nil];
 	if (!dopamineVersion) return 1;
-
-	[[NSFileManager defaultManager] createDirectoryAtPath:genPath withIntermediateDirectories:YES attributes:nil error:nil];
 
 	if (!comingFromJBUpdate) {
 		// Copy /usr/lib to /var/jb/basebin/.fakelib
 		[[NSFileManager defaultManager] removeItemAtPath:fakelibPath error:nil];
 		[[NSFileManager defaultManager] createDirectoryAtPath:fakelibPath withIntermediateDirectories:YES attributes:nil error:nil];
-		carbonCopy(originUsrLibPath, fakelibPath);
+		carbonCopy(@"/usr/lib", fakelibPath);
 
 		// Delete the dyld inside .fakelib
 		[[NSFileManager defaultManager] removeItemAtPath:fakelibDyldPath error:nil];
 
 		// Symlink .fakelib/dyld -> /var/jb/basebin/gen/dyld
-		[[NSFileManager defaultManager] createSymbolicLinkAtPath:fakelibDyldPath withDestinationPath:targetDyldPath error:nil];
+		[[NSFileManager defaultManager] createSymbolicLinkAtPath:fakelibDyldPath withDestinationPath:dyldPatchedPath error:nil];
 
 		// Symlink .fakelib/systemhook.dylib -> /var/jb/basebin/systemhook.dylib
-		[[NSFileManager defaultManager] createSymbolicLinkAtPath:fakelibSystemHookPath withDestinationPath:targetSystemhookPath error:nil];
+		[[NSFileManager defaultManager] createSymbolicLinkAtPath:fakelibSystemHookPath withDestinationPath:systemhookPath error:nil];
 
 		// Backup original dyld
-		carbonCopy(dyldPath, dyldOrigPath);
+		carbonCopy(@"/usr/lib/dyld", dyldOrigPath);
 	}
 
 	carbonCopy(dyldOrigPath, dyldInflightPath);
 
 	NSString *dyldUUIDPrefix = [@"DOPA" stringByAppendingString:dopamineVersion];
 	if (apply_dyld_patch(dyldInflightPath, dyldUUIDPrefix.UTF8String) != 0) return 2;
-	if (merge_dyldhook(dyldInflightPath, dyldhookMergeDylibPath, dyldInflightPath) != 0) return 3;
+	if (merge_dyldhook(dyldInflightPath, dyldInflightPath) != 0) return 3;
 	if (resign_file(dyldInflightPath, @"com.apple.dyld", YES) != 0) return 4;
 
 	if (comingFromJBUpdate) {
@@ -167,9 +155,4 @@ int basebin_generate_internal(NSString *originUsrLibPath, NSString *basebinPath,
 
 	[[NSFileManager defaultManager] moveItemAtPath:dyldInflightPath toPath:dyldPatchedPath error:nil];
 	return 0;
-}
-
-int basebin_generate(bool comingFromJBUpdate)
-{
-	return basebin_generate_internal(@"/usr/lib", JBROOT_PATH(@"/basebin"), JBROOT_PATH(@"/basebin"), comingFromJBUpdate);
 }
