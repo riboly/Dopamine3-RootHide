@@ -64,7 +64,7 @@ void directory_collect_untrusted_cdhashes_by_path(const char *directoryPath, boo
 		printf("Collecting cdhash of %s\n", path);
 		cdhash_t *thisCdhashes = NULL;
 		uint32_t thiscdhashCount = 0;
-		fat_collect_untrusted_cdhashes(fat, &thisCdhashes, &thiscdhashCount);
+		file_collect_untrusted_cdhashes_by_path(path, &thisCdhashes, &thiscdhashCount);
 		cdhashCount += thiscdhashCount;
 		cdhashes = realloc(cdhashes, cdhashCount * sizeof(cdhash_t));
 		memcpy(&cdhashes[cdhashCount-thiscdhashCount], thisCdhashes, sizeof(cdhash_t) * thiscdhashCount);

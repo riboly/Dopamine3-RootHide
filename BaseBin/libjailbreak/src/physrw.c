@@ -66,6 +66,14 @@ int physrw_physaccess_mapped(uint64_t pa, uint64_t size, kernel_map_accessor acc
 	return 0;
 }
 
+int kaccess_mapped(uint64_t va, uint64_t size, kernel_map_accessor accessorBlock)
+{
+	void *ptr = physrw_kvtouaddr(va);
+	if (!ptr) return -1;
+	accessorBlock(ptr);
+	return 0;
+}
+
 int physrw_handoff(pid_t pid)
 {
 	if (!pid) return -1;

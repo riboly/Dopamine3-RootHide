@@ -11,6 +11,7 @@
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 
 const struct mach_header *get_mach_header(const char *name);
+bool host_is_arm64e(void);
 void proc_iterate(void (^itBlock)(uint64_t, bool*));
 
 uint64_t proc_self(void);
@@ -23,6 +24,9 @@ uint64_t tte_self(void);
 uint64_t task_get_ipc_port_table_entry(uint64_t task, mach_port_t port);
 uint64_t task_get_ipc_port_object(uint64_t task, mach_port_t port);
 uint64_t task_get_ipc_port_kobject(uint64_t task, mach_port_t port);
+
+uint64_t vm_page_for_pnum(uint64_t pnum);
+uint64_t vm_page_for_pai(uint64_t pai);
 
 uint64_t alloc_page_table_unassigned(void);
 uint64_t pmap_alloc_page_table(uint64_t pmap, uint64_t va);

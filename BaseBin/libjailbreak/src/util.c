@@ -42,6 +42,38 @@ const struct mach_header *get_mach_header(const char *name)
 	return mh;
 }
 
+bool host_is_arm64e(void)
+{
+	cpu_type_t cpuType = 0;
+	cpu_subtype_t cpuSubtype = 0;
+	size_t size = sizeof(cpuType);
+	if (sysctlbyname("hw.cputype", &cpuType, &size, NULL, 0) != 0) return false;
+	size = sizeof(cpuSubtype);
+	if (sysctlbyname("hw.cpusubtype", &cpuSubtype, &size, NULL, 0) != 0) return false;
+	return cpuType == CPU_TYPE_ARM64 && ((cpuSubtype & ~0xff000000) == CPU_SUBTYPE_ARM64E);
+}
+
+uint64_t vm_page_for_pnum(uint64_t pnum)
+{
+	uint64_t pages = kread64(ksymbol(vm_page_array_beginning_addr));
+	uint64_t pagesEnd = kread64(ksymbol(vm_page_array_ending_addr));
+	uint64_t firstPnum = kread64(ksymbol(vm_first_phys_ppnum));
+	uint64_t pageCount = (pagesEnd - pages) / ksizeof(vm_page);
+
+	if (pnum >= firstPnum && pnum < firstPnum + pageCount) {
+		return pages + ((pnum - firstPnum) * ksizeof(vm_page));
+	}
+	if (__builtin_available(iOS 27.0, *)) {
+		return ksymbol(vm_pages_radix_root) ? vm_page_find_canonical_radix(pnum) : 0;
+	}
+	return 0;
+}
+
+uint64_t vm_page_for_pai(uint64_t pai)
+{
+	return vm_page_for_pnum(pai + atop(kread64(ksymbol(vm_first_phys))));
+}
+
 void proc_iterate(void (^itBlock)(uint64_t, bool*))
 {
 	uint64_t proc = ksymbol(allproc);

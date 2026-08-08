@@ -7,6 +7,37 @@
 #include <dlfcn.h>
 extern int fileport_makeport (int fd, mach_port_t * port);
 
+int jbclient_mach_hookd_send_msg(struct hookd_mach_msg *msg, struct hookd_mach_msg_reply *reply)
+{
+	mach_port_t replyPort = mig_get_reply_port();
+	if (!replyPort) return KERN_FAILURE;
+
+	mach_port_t launchdPort = jbclient_mach_get_launchd_port();
+	if (!launchdPort) return KERN_FAILURE;
+
+	msg->hdr.msgh_bits |= MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MAKE_SEND_ONCE);
+	msg->hdr.msgh_remote_port = launchdPort;
+	msg->hdr.msgh_local_port = replyPort;
+	msg->hdr.msgh_voucher_port = MACH_PORT_NULL;
+	msg->hdr.msgh_id = 0x40000000 | 206;
+
+	kern_return_t kr = mach_msg(&msg->hdr, MACH_SEND_MSG, msg->hdr.msgh_size, 0, 0, 0, 0);
+	if (kr != KERN_SUCCESS) {
+		mach_port_deallocate(task_self_trap(), launchdPort);
+		return kr;
+	}
+
+	kr = mach_msg(&reply->hdr, MACH_RCV_MSG, 0, reply->hdr.msgh_size, replyPort, 0, 0);
+	if (kr != KERN_SUCCESS) {
+		mach_port_deallocate(task_self_trap(), launchdPort);
+		return kr;
+	}
+
+	mach_msg_destroy(&reply->hdr);
+	mach_port_deallocate(task_self_trap(), launchdPort);
+	return KERN_SUCCESS;
+}
+
 mach_port_t jbclient_mach_get_launchd_port(void)
 {
 	mach_port_t launchdPort = MACH_PORT_NULL;

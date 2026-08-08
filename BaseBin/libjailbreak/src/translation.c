@@ -5,14 +5,6 @@
 #include <errno.h>
 #include <stdio.h>
 
-struct tt_level {
-	uint64_t offMask;
-	uint64_t shift;
-	uint64_t indexMask;
-	uint64_t validMask;
-	uint64_t typeMask;
-	uint64_t typeBlock;
-};
 struct tt_level arm_tt_level[4];
 
 // Address translation physical <-> virtual
