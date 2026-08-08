@@ -8,7 +8,7 @@
 #include <libjailbreak/roothider.h>
 
 #include "../systemhook/src/common.h"
-#include "../systemhook/src/envbuf.h"
+#include "../systemhook/src/common/envbuf.h"
 
 const char* HOOK_DYLIB_PATH = NULL;
 
@@ -442,4 +442,3 @@ int roothide_launchd___posix_spawn_prehook(pid_t *restrict pidp, const char *res
 	
 	return __posix_spawn_hook(pidp, path, desc, argv, envp);
 }
-

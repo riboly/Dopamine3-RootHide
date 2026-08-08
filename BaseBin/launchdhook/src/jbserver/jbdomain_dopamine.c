@@ -40,6 +40,11 @@ static char *read_file_to_string(const char *path) {
     return buffer;
 }
 
+static bool is_dopamine_app(const char *path)
+{
+	return path && strstr(path, "/Dopamine.app/") != NULL;
+}
+
 
 bool dopamine_domain_allowed(audit_token_t clientToken)
 {

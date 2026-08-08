@@ -9,7 +9,7 @@
 #include <paths.h>
 #include <sys/stat.h>
 #include <dlfcn.h>
-#include "envbuf.h"
+#include "common/envbuf.h"
 #include "private.h"
 #include <libjailbreak/jbclient_xpc.h>
 #include <libjailbreak/jbserver_domains.h>

@@ -426,26 +426,26 @@ int systemwide_fork_fix(audit_token_t *parentToken, uint64_t childPid)
 
 			uint64_t parentHeader   = parentVmMap + koffsetof(vm_map, hdr);
 			uint32_t parentNentries = kread32(parentHeader + koffsetof(vm_map_header, nentries));
-			uint64_t parentEntry    = kread_ptr(parentHeader + koffsetof(vm_map_header, links) + koffsetof(vm_map_links, next));
+			uint64_t parentEntry    = kread_ptr(parentHeader + koffsetof(vm_map_header, first));
 
 			uint64_t childHeader   = childVmMap + koffsetof(vm_map, hdr);
 			uint32_t childNentries = kread32(parentHeader + koffsetof(vm_map_header, nentries));
-			uint64_t childEntry    = kread_ptr(childHeader + koffsetof(vm_map_header, links) + koffsetof(vm_map_links, next));
+			uint64_t childEntry    = kread_ptr(childHeader + koffsetof(vm_map_header, first));
 
 			uint64_t childFirstEntry = childEntry, parentFirstEntry = parentEntry;
 			uint32_t childIdx = 0, parentIdx = 0;
 			do {
-				uint64_t childStart  = kread_ptr(childEntry  + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, min));
-				uint64_t childEnd    = kread_ptr(childEntry  + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, max));
-				uint64_t parentStart = kread_ptr(parentEntry + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, min));
-				uint64_t parentEnd   = kread_ptr(parentEntry + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, max));
+				uint64_t childStart  = kread_ptr(childEntry  + koffsetof(vm_map_entry, start));
+				uint64_t childEnd    = kread_ptr(childEntry  + koffsetof(vm_map_entry, end));
+				uint64_t parentStart = kread_ptr(parentEntry + koffsetof(vm_map_entry, start));
+				uint64_t parentEnd   = kread_ptr(parentEntry + koffsetof(vm_map_entry, end));
 
 				if (parentStart < childStart) {
-					parentEntry = kread_ptr(parentEntry + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, next));
+					parentEntry = kread_ptr(parentEntry + koffsetof(vm_map_entry, next));
 					parentIdx++;
 				}
 				else if (parentStart > childStart) {
-					childEntry = kread_ptr(childEntry + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, next));
+					childEntry = kread_ptr(childEntry + koffsetof(vm_map_entry, next));
 					childIdx++;
 				}
 				else {
@@ -461,9 +461,9 @@ int systemwide_fork_fix(audit_token_t *parentToken, uint64_t childPid)
 						kwrite64(childEntry + koffsetof(vm_map_entry, flags), childFlags);
 					}
 
-					parentEntry = kread_ptr(parentEntry + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, next));
+					parentEntry = kread_ptr(parentEntry + koffsetof(vm_map_entry, next));
 					parentIdx++;
-					childEntry  = kread_ptr(childEntry  + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, next));
+					childEntry  = kread_ptr(childEntry  + koffsetof(vm_map_entry, next));
 					childIdx++;
 				}
 			} while (parentEntry != 0 && childEntry != 0 && parentEntry != parentFirstEntry && childEntry != childFirstEntry && parentIdx < parentNentries && childIdx < childNentries);

@@ -9,7 +9,7 @@
 #include <litehook.h>
 
 #include "common.h"
-#include "envbuf.h"
+#include "common/envbuf.h"
 #include "sandbox.h"
 #include "roothider.h"
 
@@ -522,4 +522,3 @@ void roothide_init_with_executable(const char* executable)
 
 	dlopen(JBROOT_PATH("/usr/lib/roothidepatch.dylib"), RTLD_NOW); //require jit
 }
-
