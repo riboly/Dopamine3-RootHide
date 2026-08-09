@@ -99,49 +99,7 @@ static int systemwide_get_boot_uuid(char **bootUUIDOut)
 	return 0;
 }
 
-CS_SuperBlob *siginfo_resolve_superblob(struct siginfo *siginfo, int pid, int fd)
-{
-	if (!siginfo) return NULL;
-	if (siginfo->signature.fs_blob_size == 0) return NULL;
-
-	size_t superblobSize = siginfo->signature.fs_blob_size;
-	CS_SuperBlob *superblob = malloc(superblobSize);
-	if (!superblob) return NULL;
-
-	bool success = false;
-
-	switch (siginfo->source) {
-		case SIGNATURE_SOURCE_FILE: {
-			uintptr_t superblobStart = siginfo->signature.fs_file_start + (uintptr_t)siginfo->signature.fs_blob_start;
-			uintptr_t superblobEnd   = superblobStart + superblobSize;
-			struct stat st = {};
-
-        	if (fstat(fd, &st) != 0) break;
-			if (superblobEnd > st.st_size) break;
-			if (lseek(fd, superblobStart, SEEK_SET) != superblobStart) break;
-			if (read(fd, superblob, superblobSize) != superblobSize) break;
-
-			success = true;
-		}
-		case SIGNATURE_SOURCE_PROC: {
-			uint64_t proc = proc_find(pid);
-
-			if (!proc) break;
-			if (proc_vreadbuf(proc, siginfo->signature.fs_blob_start, superblob, superblobSize) != 0) break;
-
-			success = true;
-		}
-	}
-
-	if (!success) {
-		free(superblob);
-		superblob = NULL;
-	}
-
-	return superblob;
-}
-
-int systemwide_trust_file(audit_token_t *processToken, int rfd, struct siginfo *siginfo, size_t siginfoSize)
+int systemwide_trust_file(audit_token_t *processToken, int rfd, struct siginfo *siginfo, size_t siginfoSize, bool attach)
 {
 	if (siginfo && siginfoSize != sizeof(struct siginfo)) return -1;
 
@@ -172,75 +130,55 @@ int systemwide_trust_file(audit_token_t *processToken, int rfd, struct siginfo *
 		}
 	}
 
+	char filepath[PATH_MAX] = {0};
+	if (fcntl(fd, F_GETPATH, filepath) != 0) {
+		close(fd);
+		return -1;
+	}
+	if (string_has_prefix(filepath, "/private/preboot/Cryptexes/") ||
+		(isRemovableBundlePath(filepath) && !hasTrollstoreLiteMarker(filepath))) {
+		close(fd);
+		return 0;
+	}
+
+	// RootHide randomizes the on-disk signature first. Signatures are then
+	// reloaded so TXM adjustments and optional attachment use the new blobs.
 	cdhash_t *cdhashes = NULL;
 	uint32_t cdhashesCount = 0;
-
-	if (siginfo) {
-		// If we were passed a siginfo, get the cdhash of the superblob from the siginfo
-		CS_SuperBlob *superblob = siginfo_resolve_superblob(siginfo, pid, fd);
-		if (superblob) {
-			cdhash_t cdhash;
-			if (code_signature_calculate_adhoc_cdhash(superblob, cdhash)) {
-				if (!is_cdhash_trustcached(cdhash)) {
-
-
-/******************************************* roothide specfic ****************************************/
-do {
-	char filepath[PATH_MAX] = {0};
-	if(fcntl(fd, F_GETPATH, filepath) != 0) {
-		JBLogError("Failed to get file path for fd %d", fd);
-		break;
-	}
-	if(string_has_prefix(filepath, "/private/preboot/Cryptexes/")) {
-		JBLogDebug("Skipping Cryptexes file: %s", filepath);
-		break;
-	}
-	if(isRemovableBundlePath(filepath) && !hasTrollstoreLiteMarker(filepath)) {
-		// ignore adhoc signed apps(removable system apps or other stuffs) which is not installed via tslite
-		JBLogDebug("ignoring addhoc signed app: %s\n", filepath);
-		break;
-	}
-	if(ensure_randomized_cdhash_for_slice(filepath, siginfo->signature.fs_file_start, cdhash) != 0) {
-		JBLogError("Failed to ensure randomized cdhash for %s", filepath);
-		break;
-	}
-/******************************************* roothide specfic ****************************************/
-
-
-					cdhashes = malloc(sizeof(cdhash_t));
-					cdhashesCount = 1;
-					memcpy(&cdhashes[0], &cdhash, sizeof(cdhash_t));
-
-
-/**********/
-} while(0);
-/********/
-
-
-				}
-			}
-			free(superblob);
-		}
-	}
-	else {
-		// If we weren't passed a siginfo, get cdhashes of all slices
-		file_collect_untrusted_cdhashes(fd, &cdhashes, &cdhashesCount);
-	}
-	
+	file_collect_untrusted_cdhashes(fd, &cdhashes, &cdhashesCount);
 	if (cdhashes && cdhashesCount > 0) {
 		jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
 		free(cdhashes);
 	}
 
+	struct siginfo *sigInfos = NULL;
+	uint32_t sigInfoCount = 0;
+	file_collect_signatures(fd, &sigInfos, &sigInfoCount);
+
+	int r = trust_signatures(pid, fd, sigInfos, sigInfoCount);
+	if (attach) {
+		for (uint32_t i = 0; i < sigInfoCount; i++) {
+			int attachResult = fcntl(fd, F_ADDSIGS, &sigInfos[i].signature);
+			if (attachResult != 0) r = attachResult;
+		}
+	}
+
+	for (uint32_t i = 0; i < sigInfoCount; i++) {
+		if (sigInfos[i].source == SIGNATURE_SOURCE_ALLOCATION) {
+			free(sigInfos[i].signature.fs_blob_start);
+		}
+	}
+	free(sigInfos);
+
 	close(fd);
-	return 0;
+	return r;
 }
 
 int systemwide_trust_file_by_path(const char *path)
 {
 	int fd = open(path, O_RDONLY);
 	if (fd < 0) return -1;
-	int r = systemwide_trust_file(NULL, fd, NULL, 0);
+	int r = systemwide_trust_file(NULL, fd, NULL, 0, false);
 	close(fd);
 	return r;
 }
@@ -394,10 +332,33 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 		if (xpc_get_type(customTrustObj) == XPC_TYPE_STRING) {
 			const char *customTrustStr = xpc_string_get_string_ptr(customTrustObj);
 			uint32_t customTrust = pmap_cs_trust_string_to_int(customTrustStr);
-			if (customTrust >= 2) {
-				uint64_t mainCodeDir = proc_find_main_binary_code_dir(proc);
-				if (mainCodeDir) {
-					kwrite32(mainCodeDir + koffsetof(pmap_cs_code_directory, trust), customTrust);
+			if (host_is_arm64e()) {
+				if (customTrust >= 2) {
+					uint64_t mainCodeDir = proc_find_main_binary_code_dir(proc);
+					if (mainCodeDir) {
+						kwrite32(mainCodeDir + koffsetof(pmap_cs_code_directory, trust), customTrust);
+					}
+				}
+			}
+
+			if (__builtin_available(iOS 17.0, *)) {
+				if (customTrust <= pmap_cs_trust_string_to_int("PMAP_CS_APP_STORE")) {
+					proc_csflags_clear(proc, CS_PLATFORM_BINARY);
+
+					uint64_t proc_ro = kread_ptr(proc + koffsetof(proc, proc_ro));
+					uint32_t t_flags = kread32(proc_ro + koffsetof(proc_ro, t_flags_ro));
+
+					t_flags &= ~(kconstant(TFRO_PLATFORM));
+					if (kconstant(TFRO_HARDENED)) {
+						t_flags &= ~(kconstant(TFRO_HARDENED));
+					}
+
+					kwrite32(proc_ro + koffsetof(proc_ro, t_flags_ro), t_flags);
+
+					if (koffsetof(task, security_config)) {
+						uint64_t task = proc_task(proc);
+						kwrite8(task + koffsetof(task, security_config), kread8(task + koffsetof(task, security_config)) & ~(0b111 << 3));
+					}
 				}
 			}
 		}
