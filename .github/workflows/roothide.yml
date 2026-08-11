@@ -2,6 +2,15 @@ name: Build roothide Dopamine
 
 on:
   workflow_dispatch:
+    inputs:
+      build_mode:
+        description: Build scope
+        required: true
+        default: focused
+        type: choice
+        options:
+          - focused
+          - full
   pull_request:
   push:
 
@@ -13,6 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  BUILD_MODE: ${{ github.event.inputs.build_mode || 'focused' }}
   THEOS: ${{ github.workspace }}/theos
   THEOS_COMMIT: 88506b2c22e9e07dd4ed055f23c9e398a117a2c7
   IOS_SDK_VERSION: "16.5"
@@ -89,6 +99,7 @@ jobs:
             swiftpm-${{ runner.os }}-xcode15.4-
 
       - name: Build trustcache
+        if: env.BUILD_MODE == 'full'
         run: |
           set -euo pipefail
           source_dir="$RUNNER_TEMP/trustcache"
@@ -107,11 +118,27 @@ jobs:
           xcodebuild -version
           test "$(xcrun --sdk iphoneos --show-sdk-version)" = "17.5"
           test -d "$THEOS/sdks/iPhoneOS${IOS_SDK_VERSION}.sdk"
-          command -v make ldid trustcache
+          command -v make ldid
           make --version | head -n 1
-          file "$(command -v trustcache)"
+          if [ "$BUILD_MODE" = full ]; then
+            command -v trustcache
+            file "$(command -v trustcache)"
+          fi
 
-      - name: Build
+      - name: Focused build systemhook
+        if: env.BUILD_MODE == 'focused'
+        run: |
+          set -euo pipefail
+          export CLANG_MODULE_CACHE_PATH="$RUNNER_TEMP/clang-module-cache"
+          mkdir -p "$CLANG_MODULE_CACHE_PATH"
+          make -C BaseBin systemhook
+          mkdir -p artifacts
+          cp BaseBin/systemhook/systemhook.dylib artifacts/systemhook.dylib
+          file artifacts/systemhook.dylib
+          strings artifacts/systemhook.dylib | grep -F "APTTRUST-7C33"
+
+      - name: Full build TIPA
+        if: env.BUILD_MODE == 'full'
         run: |
           set -euo pipefail
           export CLANG_MODULE_CACHE_PATH="$RUNNER_TEMP/clang-module-cache"
@@ -123,7 +150,17 @@ jobs:
           cp Application/Dopamine.tipa "Application/${artifact}"
           echo "artifact=${artifact}" >> "$GITHUB_ENV"
 
-      - name: Upload artifact
+      - name: Upload focused artifact
+        if: env.BUILD_MODE == 'focused'
+        uses: actions/upload-artifact@v4
+        with:
+          name: roothide-systemhook-${{ github.sha }}
+          path: artifacts/systemhook.dylib
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload full artifact
+        if: env.BUILD_MODE == 'full'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.artifact }}
