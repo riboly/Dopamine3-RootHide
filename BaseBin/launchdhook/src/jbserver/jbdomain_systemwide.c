@@ -245,7 +245,7 @@ int systemwide_trust_file_by_path(const char *path)
 	return r;
 }
 
-int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, char **bootUUIDOut, char **sandboxExtensionsOut, bool *fullyDebuggedOut)
+int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, char **bootUUIDOut, char **sandboxExtensionsOut, bool *fullyDebuggedOut, bool *forceCSAdhocOut)
 {
 	// Fetch process info
 	pid_t pid = audit_token_to_pid(*processToken);
@@ -307,6 +307,9 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 		}
 	}
 	*fullyDebuggedOut = fullyDebugged;
+
+	// CS_ADHOC needs to be forced in dyld's fcntl hook on SPTM devices.
+	*forceCSAdhocOut = (ksymbol(SPTMArgs) != 0);
 
 	// Allow invalid pages
 	cs_allow_invalid(proc, fullyDebugged);
@@ -527,6 +530,7 @@ struct jbserver_domain gSystemwideDomain = {
 				{ .name = "boot-uuid", .type = JBS_TYPE_STRING, .out = true },
 				{ .name = "sandbox-extensions", .type = JBS_TYPE_STRING, .out = true },
 				{ .name = "fully-debugged", .type = JBS_TYPE_BOOL, .out = true },
+				{ .name = "force-cs-adhoc", .type = JBS_TYPE_BOOL, .out = true },
 				{ 0 },
 			},
 		},

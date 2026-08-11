@@ -24,6 +24,11 @@ char *jbinfo_get_jbroot(void)
 	return jbInfo->jbRootPath;
 }
 
+bool jbinfo_should_force_cs_adhoc(void)
+{
+	return jbInfo->forceCSAdhoc;
+}
+
 void consume_tokenized_sandbox_extensions(char *sandboxExtensions)
 {
 	if (sandboxExtensions[0] == '\0') return;
@@ -51,7 +56,7 @@ void dyldhook_perform_checkin(void)
 
 	// Tell jbserver (in launchd) that this process exists
 	// This will, amongst other things, disable page validation, which allows instruction hooks to be applied later
-	if (jbclient_mach_process_checkin(jbRootPathPtr, bootUUIDPtr, sandboxExtensionsPtr, &jbInfo->fullyDebugged) == 0) {
+	if (jbclient_mach_process_checkin(jbRootPathPtr, bootUUIDPtr, sandboxExtensionsPtr, &jbInfo->fullyDebugged, &jbInfo->forceCSAdhoc) == 0) {
 		consume_tokenized_sandbox_extensions(sandboxExtensionsPtr);
 		jbInfo->jbRootPath = jbRootPathPtr;
 		jbInfo->bootUUID = bootUUIDPtr;
@@ -60,8 +65,21 @@ void dyldhook_perform_checkin(void)
 	}
 }
 
+mach_port_t mach_task_self_ = MACH_PORT_NULL;
+
+void mach_init_4real(void)
+{
+	extern void mach_init(void);
+	mach_init();
+
+	mach_task_self_ = task_self_trap();
+	mach_port_deallocate(mach_task_self_, mach_task_self_);
+}
+
 void dyldhook_init(uintptr_t kernelParams)
 {
+	mach_init_4real();
+
 	extern void dyldhook_init_roothide(uintptr_t);
 	dyldhook_init_roothide(kernelParams);
 
