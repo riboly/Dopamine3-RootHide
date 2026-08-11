@@ -15,13 +15,29 @@ void jbinfo_initialize_dynamic_offsets(xpc_object_t xoffsetDict)
 	SYSTEM_INFO_DESERIALIZE(xoffsetDict);
 }
 
+struct xnu_version {
+	uint64_t major;
+	uint64_t minor;
+	uint64_t patch;
+};
+
+static int xnu_version_compare(struct xnu_version v1, struct xnu_version v2)
+{
+	if (v1.major != v2.major) return v1.major > v2.major ? 1 : -1;
+	if (v1.minor != v2.minor) return v1.minor > v2.minor ? 1 : -1;
+	if (v1.patch != v2.patch) return v1.patch > v2.patch ? 1 : -1;
+	return 0;
+}
+
 void jbinfo_initialize_hardcoded_offsets(void)
 {
 	struct utsname name;
 	uname(&name);
 	char *darwinVersion = name.release;
-	uint64_t xnuMajor = 0, xnuMinor = 0;
-	sscanf(strstr(name.version, "xnu-"), "xnu-%llu.%llu.%*s", &xnuMajor, &xnuMinor);
+	struct xnu_version xnuVersion = { 0 };
+	if (sscanf(strstr(name.version, "xnu-"), "xnu-%llu.%llu.%llu~%*s", &xnuVersion.major, &xnuVersion.minor, &xnuVersion.patch) != 3) {
+		sscanf(strstr(name.version, "xnu-"), "xnu-%llu.%llu.%*s", &xnuVersion.major, &xnuVersion.minor);
+	}
 
 	bool isArm64e = host_is_arm64e();
 
@@ -355,7 +371,7 @@ void jbinfo_initialize_hardcoded_offsets(void)
 						gSystemInfo.kernelStruct.pmap_cs_code_directory.trust       = 0x1DC;
 					}
 
-					if (strcmp(darwinVersion, "22.1.0") >= 0 && (xnuMajor > 8792 || (xnuMajor == 8792 && xnuMinor >= 42))) { // iOS 16.1+
+					if (strcmp(darwinVersion, "22.1.0") >= 0 && xnu_version_compare(xnuVersion, (struct xnu_version){8792, 42, 0}) >= 0) { // iOS 16.1+
 						gSystemInfo.kernelStruct.ipc_space.table_uses_smr = true;
 
 						// proc_ro

@@ -1,6 +1,8 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <spawn.h>
 #include <xpc/xpc.h>
+
+extern xpc_object_t xpc_create_from_plist(const void *buf, size_t len);
 #include "private.h"
 #include "inline.h"
 

@@ -169,7 +169,10 @@ void roothide_launchd_postinit(bool firstLoad)
 	MSHookFunction(&xpc_pipe_routine_reply, (void*)new_xpc_pipe_routine_reply, &orig_xpc_pipe_routine_reply);
 
 	// load jailbreakd after applying hooks
-	assert(initJailbreakd(firstLoad) == 0);
+	int jailbreakdResult = initJailbreakd(firstLoad);
+	if (jailbreakdResult != 0) {
+		JBLogError("initJailbreakd failed: %d; keeping launchd alive", jailbreakdResult);
+	}
 }
 
 #include <dlfcn.h>
@@ -212,7 +215,10 @@ void fix__iosConnect()
 int roothide_trust_executable_recurse(const char *executablePath, const char *processWorkingDir, xpc_object_t preferredArchsArray);
 int roothide_launchd_trust_executable(const char* path)
 {
-	return dyld_patch_enabled() ? systemwide_trust_file_by_path(path) : roothide_trust_executable_recurse(path, "/", NULL);
+	// dyld patching does not make dependencies trusted before dyld maps them.
+	// Recursing here is required for rootless tools such as apt-get, whose
+	// private libraries are loaded before systemhook can handle a dlopen.
+	return roothide_trust_executable_recurse(path, "/", NULL);
 }
 
 int roothide_launchd___posix_spawn_posthook(pid_t *restrict pidp, const char *restrict path, struct _posix_spawn_args_desc *desc, char *const argv[restrict], char *const envp[restrict])
@@ -341,9 +347,9 @@ int roothide_launchd___posix_spawn_prehook(pid_t *restrict pidp, const char *res
 		/* if the jailbreak activation is interrupted for some reason, 
 			we prevent the app from relaunching to prevent the system from being in an unknown state */
 		if(launchdhookFirstLoad) {
-#ifdef ENABLE_LOGS
-			launchd_panic("reboot device due to jailbreak failure!");
-#endif
+			// Do not reboot launchd when activation fails. Returning EPERM keeps
+			// the device usable and preserves the real failure in the logs.
+			JBLogError("rejecting Dopamine relaunch after failed activation");
 			return EPERM;
 		}
 

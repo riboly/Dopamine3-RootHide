@@ -119,3 +119,17 @@
 "Status_Title_Select_Package_Managers" = "Select Package Manager(s)";
 "Select_Package_Managers_Install_Message" = "If you are unsure which one to select, select Sileo";
 "Continue" = "Continue";
+
+// Fake mounts
+"Mount_Title" = "Mounts";
+"Mount_Add_Title" = "Add Mount";
+"Mount_Manage_Title" = "Manage Mounts";
+"Mount_Path_Prompt" = "Enter the absolute path of a directory to mirror into the jailbreak.";
+"Mount_Path_Invalid" = "The path must point to an existing directory and cannot be the filesystem root.";
+"Mount_No_Paths" = "No mount paths have been configured.";
+"Mount_Unmount_Keep_Copy" = "Unmount and Keep Copy";
+"Mount_Unmount_Delete_Copy" = "Unmount and Delete Copy";
+"Mount_Operation_Succeeded" = "The mount operation completed successfully.";
+"Mount_Operation_Failed" = "The mount operation failed with error %d.";
+"Button_Mount" = "Mount";
+"Button_OK" = "OK";

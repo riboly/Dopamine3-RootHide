@@ -183,6 +183,7 @@
 		8C7198282ABF0E84003C6658 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 8C7198262ABF0E84003C6658 /* LaunchScreen.storyboard */; };
 		8C71982B2ABF0E84003C6658 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 8C71982A2ABF0E84003C6658 /* main.m */; };
 		8C9E46292ACA1CC700B5456A /* UIImage+Blur.m in Sources */ = {isa = PBXBuildFile; fileRef = 8C9E46282ACA1CC700B5456A /* UIImage+Blur.m */; };
+		8CB4087D301FFB130097E18B /* clock_alarm.c in Sources */ = {isa = PBXBuildFile; fileRef = 8CB4087C301FFB050097E18B /* clock_alarm.c */; };
 		8CB94F042B59E17A0098BAFD /* basebin.tc in Resources */ = {isa = PBXBuildFile; fileRef = 8CB94F022B59E17A0098BAFD /* basebin.tc */; };
 		8CB94F052B59E17A0098BAFD /* basebin.tar in Resources */ = {isa = PBXBuildFile; fileRef = 8CB94F032B59E17A0098BAFD /* basebin.tar */; };
 		8CBF1A4A2EC3B71700EB2308 /* UIImage+JPEG2000.m in Sources */ = {isa = PBXBuildFile; fileRef = 8CBF1A492EC3B71700EB2308 /* UIImage+JPEG2000.m */; };
@@ -522,6 +523,8 @@
 		8C71982A2ABF0E84003C6658 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		8C9E46272ACA1C8D00B5456A /* UIImage+Blur.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "UIImage+Blur.h"; sourceTree = "<group>"; };
 		8C9E46282ACA1CC700B5456A /* UIImage+Blur.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "UIImage+Blur.m"; sourceTree = "<group>"; };
+		8CB4087C301FFB050097E18B /* clock_alarm.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = clock_alarm.c; sourceTree = "<group>"; };
+		8CB4087F301FFB220097E18B /* clock_alarm.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = clock_alarm.h; sourceTree = "<group>"; };
 		8CB94F022B59E17A0098BAFD /* basebin.tc */ = {isa = PBXFileReference; lastKnownFileType = file; name = basebin.tc; path = ../../../BaseBin/basebin.tc; sourceTree = "<group>"; };
 		8CB94F032B59E17A0098BAFD /* basebin.tar */ = {isa = PBXFileReference; lastKnownFileType = archive.tar; name = basebin.tar; path = ../../../BaseBin/basebin.tar; sourceTree = "<group>"; };
 		8CBF1A482EC3B71700EB2308 /* UIImage+JPEG2000.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "UIImage+JPEG2000.h"; sourceTree = "<group>"; };
@@ -780,6 +783,8 @@
 		8C029F402B4DFCFE0071DE58 /* Jailbreak */ = {
 			isa = PBXGroup;
 			children = (
+				8CB4087F301FFB220097E18B /* clock_alarm.h */,
+				8CB4087C301FFB050097E18B /* clock_alarm.c */,
 				8C029F442B4DFD910071DE58 /* DOBootstrapper.h */,
 				8C029F452B4DFD910071DE58 /* DOBootstrapper.m */,
 				8C029F612B4E2E140071DE58 /* DOJailbreaker.h */,
@@ -1694,6 +1699,7 @@
 				8C71981A2ABF0E82003C6658 /* DOAppDelegate.m in Sources */,
 				042479B72B66916B0082581B /* DOActionMenuView.m in Sources */,
 				8C029F632B4E2E140071DE58 /* DOJailbreaker.m in Sources */,
+				8CB4087D301FFB130097E18B /* clock_alarm.c in Sources */,
 				040622AA2B77FE8E00393AAD /* DOPkgManagerPickerViewController.m in Sources */,
 				042479A82B66916B0082581B /* DOPSListController.m in Sources */,
 				042479B12B66916B0082581B /* DODoubleHelixIndicator.m in Sources */,

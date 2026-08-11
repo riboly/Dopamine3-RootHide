@@ -1,6 +1,7 @@
 #include <spawn.h>
 #include <unistd.h>
 #include <assert.h>
+#include <dlfcn.h>
 #include <pthread.h>
 #include <xpc/xpc.h>
 #include <mach/mach.h>
@@ -11,6 +12,7 @@
 #include "jailbreakd.h"
 #include "common.h"
 #include "log.h"
+#include "../jbserver.h"
 
 #ifdef ENABLE_LOGS
 static void (*JBDLogDebugFunction)(const char *format, ...);
@@ -37,7 +39,10 @@ mach_port_t gJailbreakdPort = MACH_PORT_NULL;
 
 int registerServerPort()
 {
-	assert(getpid() == 1);
+	if (getpid() != 1) {
+		JBLogError("registerServerPort called outside launchd: pid=%d", getpid());
+		return -1;
+	}
 
 	// deallocate the previous port if it exists
 	if(MACH_PORT_VALID(gJailbreakdPort)) {
@@ -45,14 +50,26 @@ int registerServerPort()
 		gJailbreakdPort = MACH_PORT_NULL;
 	}
 
-	mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &gJailbreakdPort);
-	mach_port_insert_right(mach_task_self(), gJailbreakdPort, gJailbreakdPort, MACH_MSG_TYPE_MAKE_SEND);
+	kern_return_t kr = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &gJailbreakdPort);
+	if (kr != KERN_SUCCESS) {
+		JBLogError("mach_port_allocate failed: %x,%s", kr, mach_error_string(kr));
+		gJailbreakdPort = MACH_PORT_NULL;
+		return -1;
+	}
+
+	kr = mach_port_insert_right(mach_task_self(), gJailbreakdPort, gJailbreakdPort, MACH_MSG_TYPE_MAKE_SEND);
+	if (kr != KERN_SUCCESS) {
+		JBLogError("mach_port_insert_right failed: %x,%s", kr, mach_error_string(kr));
+		mach_port_destroy(mach_task_self(), gJailbreakdPort);
+		gJailbreakdPort = MACH_PORT_NULL;
+		return -1;
+	}
 
 	JBLogDebug("jailbreakd server port: %x", gJailbreakdPort);
 
 #ifdef JAILBREAKD_CLIENT_PORT_FAST_GET
 	mach_port_t self_host = mach_host_self();
-	kern_return_t kr = host_set_special_port(self_host, HOST_LAUNCHCTL_PORT, gJailbreakdPort);
+	kr = host_set_special_port(self_host, HOST_LAUNCHCTL_PORT, gJailbreakdPort);
 	mach_port_deallocate(mach_task_self(), self_host);
 #endif
 
@@ -95,7 +112,10 @@ void setJailbreakdProcess(pid_t pid)
 
 int spawnJailbreakd()
 {
-	assert(getpid() == 1);
+	if (getpid() != 1) {
+		JBLogError("spawnJailbreakd called outside launchd: pid=%d", getpid());
+		return -1;
+	}
 
 	static mach_port_t bootstraport = MACH_PORT_NULL;
 
@@ -112,8 +132,17 @@ int spawnJailbreakd()
 			xpc_object_t xdict = NULL;
 			int err = xpc_pipe_receive(bootstraport, &xdict);
 			if(err == 0) {
-				abort(); /* xpchook should handle the jbclient messages, should never go here */
-				//jbserver_received_xpc_message(&gGlobalServer, xdict);
+				/* This raw bootstrap port receives jailbreakd requests before the
+				 * normal xpc hook can see them. Process and reply to them here. */
+				struct jbserver_impl *globalServer = dlsym(RTLD_DEFAULT, "gGlobalServer");
+				int (*receiveMessage)(struct jbserver_impl *, xpc_object_t) =
+					dlsym(RTLD_DEFAULT, "jbserver_received_xpc_message");
+				int handled = (globalServer && receiveMessage)
+					? receiveMessage(globalServer, xdict)
+					: -1;
+				if (handled != 0) {
+					JBLogError("jailbreakd bootstrap request failed: %d", handled);
+				}
 				xpc_release(xdict);
 			}
 		});
@@ -145,9 +174,17 @@ int spawnJailbreakd()
 
 int initJailbreakd(bool firstLoad)
 {
-	assert(getpid() == 1);
+	if (getpid() != 1) {
+		JBLogError("initJailbreakd called outside launchd: pid=%d", getpid());
+		return -1;
+	}
 
-	assert(__jailbreakd_initialized == false);
+	// launchdhook can be loaded more than once during injection or handoff.
+	// A duplicate initialization must not abort launchd.
+	if (__jailbreakd_initialized) {
+		JBLogDebug("initJailbreakd: already initialized");
+		return 0;
+	}
 
 	__firstLoad = firstLoad;
 
@@ -156,24 +193,27 @@ int initJailbreakd(bool firstLoad)
 		return -1;
 	}
 
-	__jailbreakd_initialized = true;
+	int ret = spawnJailbreakd();
+	if (ret != 0) {
+		JBLogError("spawnJailbreakd failed during init: %d", ret);
+		return ret;
+	}
 
-	return spawnJailbreakd();
+	__jailbreakd_initialized = true;
+	return 0;
 }
 
 mach_port_t reactiveJailbreakdPort()
 {
-/* restarting jailbreakd may cause it to lose its previous internal state, 
-	so we only use it during development. */
-#ifndef ENABLE_LOGS
-	//launchd_panic("jailbreakd crashed");
-	abort();
-#endif
-
-	assert(getpid() == 1);
+	/* A dead jailbreakd must not turn into an abort of launchd. */
+	if (getpid() != 1) {
+		return MACH_PORT_NULL;
+	}
 
 	//prevent jailbreakdClientPort from calling before initJailbreakd
-	assert(__jailbreakd_initialized);
+	if (!__jailbreakd_initialized) {
+		return MACH_PORT_NULL;
+	}
 
 	mach_port_t port = MACH_PORT_NULL;
 
@@ -223,7 +263,9 @@ mach_port_t reactiveJailbreakdPort()
 
 mach_port_t jailbreakdServerPort()
 {
-	assert(getpid() == 1);
+	if (getpid() != 1) {
+		return MACH_PORT_NULL;
+	}
 
 	return gJailbreakdPort;
 }

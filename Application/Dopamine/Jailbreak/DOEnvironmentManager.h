@@ -26,6 +26,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (BOOL)isInstalledThroughTrollStore;
 - (BOOL)isJailbroken;
+- (BOOL)isJailbrokenWithOtherJailbreak;
 - (BOOL)isBootstrapped;
 - (NSString *)jailbrokenVersion;
 
@@ -69,6 +70,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSError *)deleteBootstrap;
 - (NSError *)reinstallPackageManagers;
 - (NSError *)updateBootLogo;
+- (NSArray<NSString *> *)fakeMountPaths;
+- (BOOL)saveFakeMountPaths:(NSArray<NSString *> *)paths;
+- (int)setFakeMountPath:(NSString *)path mounted:(BOOL)mounted deleteMirror:(BOOL)deleteMirror;
+- (void)restoreFakeMounts;
 @end
 
 NS_ASSUME_NONNULL_END

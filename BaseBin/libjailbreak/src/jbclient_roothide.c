@@ -1,5 +1,7 @@
 #include <dlfcn.h>
+#include <errno.h>
 #include <mach-o/dyld.h>
+#include <os/log.h>
 #include "jbclient_xpc.h"
 #include "jbserver.h"
 
@@ -148,8 +150,15 @@ bool jbclient_blacklist_check_bundle(const char* bundle)
 int jbclient_trust_executable_recurse(const char *executablePath, xpc_object_t preferredArchsArray)
 {
 	if (!executablePath) return -1;
+	bool trace = strstr(executablePath, "/.jbroot-") != NULL;
+	if (trace) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] jbclient request path=%{public}s", executablePath);
+	}
 
 	if(access(executablePath, F_OK) != 0) {
+		if (trace) {
+			os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] jbclient access failed errno=%d path=%{public}s", errno, executablePath);
+		}
 		return -2;
 	}
 
@@ -171,7 +180,13 @@ int jbclient_trust_executable_recurse(const char *executablePath, xpc_object_t p
 	if (xreply) {
 		int64_t result = xpc_dictionary_get_int64(xreply, "result");
 		xpc_release(xreply);
+		if (trace) {
+			os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] jbclient reply result=%lld path=%{public}s", (long long)result, executablePath);
+		}
 		return result;
+	}
+	if (trace) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] jbclient missing reply path=%{public}s", executablePath);
 	}
 	return -1;
 }

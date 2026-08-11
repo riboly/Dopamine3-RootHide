@@ -208,11 +208,6 @@ int roothide_systemhook___posix_spawn_prehook(pid_t *restrict pidp, const char *
 		return ret;
 	}
 
-	if(!jbclient_dyld_patch_enabled())
-	{
-		trust_binary = __no_need_to_trust_now__;
-	}
-
 	return posix_spawn_hook_shared(pidp, path, desc, argv, envp, orig, trust_binary, set_process_debugged, jetsamMultiplier);
 }
 
@@ -220,11 +215,9 @@ int roothide_systemhook___posix_spawn_posthook(pid_t *restrict pidp, const char 
 {
 	posix_spawnattr_t attrp = &desc->attrp;
 
-	kSpawnConfig spawnConfig = 0;
+	kSpawnConfig spawnConfig = spawn_config_for_executable(path, argv);
 	if(!jbclient_dyld_patch_enabled())
 	{
-		spawnConfig = spawn_config_for_executable(path, argv);
-
 		if (spawnConfig & kSpawnConfigTrust) {
 			size_t outCount = 0;
 			bool preferredArchsSet = false;
@@ -309,7 +302,11 @@ int roothide_systemhook___posix_spawn_posthook(pid_t *restrict pidp, const char 
 		jbdSpawnExecCancel(path);
 	} else if (ret == 0 && pid > 0) {
 		if (should_suspend) {
-			if(jbdSpawnPatchChild(pid, should_resume) != 0) { // jdb fault? kill
+			if (!(spawnConfig & kSpawnConfigInject)) {
+				// Trust-only helpers, such as APT transports, do not need a
+				// suspended-task patch. Resume them as requested by the caller.
+				if (should_resume) kill(pid, SIGCONT);
+			} else if(jbdSpawnPatchChild(pid, should_resume) != 0) { // jdb fault? kill
 				//just kill it instead of letting it hang forever, and the requester decides what to do later
 				kill(pid, SIGQUIT); //core dump
 				kill(pid, SIGKILL);

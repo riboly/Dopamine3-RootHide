@@ -4,6 +4,7 @@
 #include <libjailbreak/libjailbreak.h>
 #include <libjailbreak/roothider.h>
 #include <libjailbreak/codesign.h>
+#include <os/log.h>
 
 int roothide_unsupport_request()
 {
@@ -32,6 +33,10 @@ void recurse_collect_untrusted_cdhashes(const char *path, const char *callerImag
 static int trust_macho_recurse(const char *machoPath, const char *dlopenCallerImagePath, const char *dlopenCallerExecutablePath, const char *workingDir, xpc_object_t preferredArchsArray)
 {
 	if(!machoPath || !dlopenCallerExecutablePath) return -1;
+	bool trace = strstr(machoPath, "/.jbroot-") != NULL;
+	if (trace) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] jbserver recurse begin path=%{public}s cwd=%{public}s", machoPath, workingDir ?: "(null)");
+	}
 	
 	size_t preferredArchCount = 0;
 	if (preferredArchsArray) preferredArchCount = xpc_array_get_count(preferredArchsArray);
@@ -52,11 +57,18 @@ static int trust_macho_recurse(const char *machoPath, const char *dlopenCallerIm
 	cdhash_t *cdhashes = NULL;
 	uint32_t cdhashesCount = 0;
 	recurse_collect_untrusted_cdhashes(machoPath, dlopenCallerImagePath, dlopenCallerExecutablePath, workingDir, &preferredArch, &cdhashes, &cdhashesCount);
+	int result = 0;
+	if (trace) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] jbserver collected count=%u path=%{public}s", cdhashesCount, machoPath);
+	}
 	if (cdhashes && cdhashesCount > 0) {
-		jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
+		result = jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
 		free(cdhashes);
 	}
-	return 0;
+	if (trace) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] jbserver upload result=%d count=%u path=%{public}s", result, cdhashesCount, machoPath);
+	}
+	return result;
 }
 
 int roothide_trust_executable_recurse(const char *executablePath, const char *processWorkingDir, xpc_object_t preferredArchsArray)

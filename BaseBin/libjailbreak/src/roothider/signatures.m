@@ -4,9 +4,11 @@
 #include <mach-o/dyld.h>
 #include "../trustcache.h"
 #include "../roothider.h"
+#include "../jbroot.h"
 
 #include <sys/stat.h>
 #include <sys/mount.h>
+#include <os/log.h>
 #import <Foundation/Foundation.h>
 
 #define DEBUG_LOG(...) //JBLogDebug(__VA_ARGS__)
@@ -135,6 +137,7 @@ typedef struct {
 static void recurse_handler(NSString *loadPath, NSString *loaderPath, NSString *mainExecutablePath, NSString *workingDir, NSMutableArray* fileCaches, NSMutableArray* rpathStack, preferredArchInfo* preferredArch, cdhash_t **cdhashesOut, uint32_t *cdhashCountOut)
 {
 @autoreleasepool {
+	bool trace = [mainExecutablePath containsString:@"/.jbroot-"];
 
 	DEBUG_LOG("Recursing into loadPath: %s\n\tloader: %s\n\tmainExecutable: %s\nworkingDir: %s\n", loadPath.fileSystemRepresentation, loaderPath.fileSystemRepresentation, mainExecutablePath.fileSystemRepresentation, workingDir.fileSystemRepresentation);
 
@@ -157,6 +160,9 @@ static void recurse_handler(NSString *loadPath, NSString *loaderPath, NSString *
 	if(!resolvedLoadPath) {
 		JBLogError("Failed to resolve dependency library for %s (loader: %s, mainExecutable: %s)", loadPath.fileSystemRepresentation, loaderPath.fileSystemRepresentation, mainExecutablePath.fileSystemRepresentation);
 		return;
+	}
+	if (trace) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] resolve load=%{public}s resolved=%{public}s loader=%{public}s", loadPath.fileSystemRepresentation, resolvedLoadPath.fileSystemRepresentation, loaderPath.fileSystemRepresentation);
 	}
 
 	if(_dyld_shared_cache_contains_path(resolvedLoadPath.fileSystemRepresentation)) {
@@ -188,10 +194,15 @@ static void recurse_handler(NSString *loadPath, NSString *loaderPath, NSString *
 		return;
 	}
 	
+	const char *jbrootPath = JBROOT_PATH("/");
+	bool isInsideJBRoot = jbrootPath && isSubPathOf(realfilepath, jbrootPath);
 	struct statfs fs;
 	int sfsret = statfs(realfilepath, &fs);
+	if (trace) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] canonical path=%{public}s mount=%{public}s inside-jbroot=%d", realfilepath, sfsret == 0 ? fs.f_mntonname : "(statfs-failed)", isInsideJBRoot);
+	}
 	if(sfsret == 0) {
-		if(strcmp(fs.f_mntonname, "/")==0 || strcmp(fs.f_mntonname, "/Developer")==0) {
+		if(!isInsideJBRoot && (strcmp(fs.f_mntonname, "/")==0 || strcmp(fs.f_mntonname, "/Developer")==0)) {
 			return;
 		}
 	}
@@ -236,7 +247,6 @@ static void recurse_handler(NSString *loadPath, NSString *loaderPath, NSString *
 	}
 
 	// Calculate cdhash and add it to our array
-	bool cdhashWasKnown = true;
 	bool isAdhocSigned = false;
 	CS_SuperBlob *superblob = macho_read_code_signature(macho);
 	if (superblob) {
@@ -247,19 +257,31 @@ static void recurse_handler(NSString *loadPath, NSString *loaderPath, NSString *
 				cdhash_t cdhash = {0};
 				if (csd_superblob_calculate_best_cdhash(decodedSuperblob, cdhash, NULL) == 0) {
 					if (!cdhashesContains(cdhash)) {
-						if (!is_cdhash_trustcached(cdhash)) {
-							// If something is trustcached we do not want to add it to your array
-							// We do want to parse it's dependencies however, as one may have been updated since we added the binary to trustcache
-							// Potential optimization: If trustcached, save in some array so we don't recheck
-
+						bool shouldAdd = is_cdhash_trustcached(cdhash);
+						if (trace) {
+							os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] cdhash path=%{public}s cached=%d", realLoadPath.fileSystemRepresentation, shouldAdd);
+						}
+						if (!shouldAdd) {
 							int ret = ensure_randomized_cdhash_for_slice(realLoadPath.fileSystemRepresentation, macho->archDescriptor.offset, cdhash);
-							if(ret==0) {
-								cdhashesAdd(cdhash);
+							if (trace) {
+								os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] randomize result=%d path=%{public}s", ret, realLoadPath.fileSystemRepresentation);
+							}
+							if (ret == 0) {
+								shouldAdd = true;
 							} else {
 								JBLogError("ensure_randomized_cdhash_for_slice(%llx) failed: %s -> (%d)", macho->archDescriptor.offset, realLoadPath.fileSystemRepresentation, ret);
 							}
 						}
-						cdhashWasKnown = false;
+
+						// Include hashes already reported as trusted in this request too. This
+						// makes the dynamic upload self-contained when an older or malformed
+						// trustcache produced a stale positive lookup.
+						if (shouldAdd) {
+							cdhashesAdd(cdhash);
+							if (trace) {
+								os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] collected path=%{public}s total=%u", realLoadPath.fileSystemRepresentation, *cdhashCountOut);
+							}
+						}
 					}
 				}
 			}
@@ -268,8 +290,13 @@ static void recurse_handler(NSString *loadPath, NSString *loaderPath, NSString *
 		free(superblob);
 	}
 
-	if (cdhashWasKnown || // If we already knew the cdhash, we can skip parsing dependencies
-		!isAdhocSigned) { // If it was not ad hoc signed, we can safely skip it aswell
+	// A trustcached executable can still reference a dependency that was
+	// installed or replaced after the executable was trusted. Always walk the
+	// dependency graph for ad-hoc binaries; fileCaches prevents recursion loops.
+	if (!isAdhocSigned) {
+		if (trace) {
+			os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] stop non-adhoc path=%{public}s", realLoadPath.fileSystemRepresentation);
+		}
 		fat_free(fat);
 		return;
 	}

@@ -311,6 +311,22 @@
                         [reinstallPackageManagersSpecifier setProperty:@"shippingbox" forKey:@"image"];
                     [reinstallPackageManagersSpecifier setProperty:@"reinstallPackageManagersPressed" forKey:@"action"];
                     [specifiers addObject:reinstallPackageManagersSpecifier];
+
+                    PSSpecifier *addMountSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
+                    [addMountSpecifier setProperty:@"Mount_Add_Title" forKey:@"title"];
+                    [addMountSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
+                    [addMountSpecifier setProperty:buttonHeight forKey:@"height"];
+                    [addMountSpecifier setProperty:@"externaldrive.badge.plus" forKey:@"image"];
+                    [addMountSpecifier setProperty:@"addMountPressed" forKey:@"action"];
+                    [specifiers addObject:addMountSpecifier];
+
+                    PSSpecifier *manageMountsSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
+                    [manageMountsSpecifier setProperty:@"Mount_Manage_Title" forKey:@"title"];
+                    [manageMountsSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
+                    [manageMountsSpecifier setProperty:buttonHeight forKey:@"height"];
+                    [manageMountsSpecifier setProperty:@"externaldrive" forKey:@"image"];
+                    [manageMountsSpecifier setProperty:@"manageMountsPressed" forKey:@"action"];
+                    [specifiers addObject:manageMountsSpecifier];
                 }
                 if ((envManager.isJailbroken || envManager.isInstalledThroughTrollStore) && envManager.isBootstrapped) {
 /*
@@ -718,6 +734,93 @@
     [confirmationAlertController addAction:uninstallAction];
     [confirmationAlertController addAction:cancelAction];
     [self presentViewController:confirmationAlertController animated:YES completion:nil];
+}
+
+- (void)showMountMessage:(NSString *)message
+{
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Mount_Title")
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (NSString *)normalizedMountPath:(NSString *)path
+{
+    NSString *trimmedPath = [path stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (![trimmedPath hasPrefix:@"/"]) trimmedPath = [@"/" stringByAppendingString:trimmedPath];
+    return trimmedPath.stringByStandardizingPath;
+}
+
+- (void)performMountPath:(NSString *)path mounted:(BOOL)mounted deleteMirror:(BOOL)deleteMirror
+{
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
+        int result = [environmentManager setFakeMountPath:path mounted:mounted deleteMirror:deleteMirror];
+        if (result == 0) {
+            NSMutableArray<NSString *> *paths = [environmentManager.fakeMountPaths mutableCopy];
+            if (mounted && ![paths containsObject:path]) [paths addObject:path];
+            if (!mounted) [paths removeObject:path];
+            if (![environmentManager saveFakeMountPaths:paths]) result = EIO;
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *message = result == 0 ? DOLocalizedString(@"Mount_Operation_Succeeded") :
+                [NSString stringWithFormat:DOLocalizedString(@"Mount_Operation_Failed"), result];
+            [self showMountMessage:message];
+        });
+    });
+}
+
+- (void)addMountPressed
+{
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Mount_Add_Title")
+                                                                   message:DOLocalizedString(@"Mount_Path_Prompt")
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.placeholder = @"/System/Library/...";
+        textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Mount") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        NSString *path = [self normalizedMountPath:alert.textFields.firstObject.text ?: @""];
+        BOOL isDirectory = NO;
+        if ([path isEqualToString:@"/"] || ![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] || !isDirectory) {
+            [self showMountMessage:DOLocalizedString(@"Mount_Path_Invalid")];
+            return;
+        }
+        [self performMountPath:path mounted:YES deleteMirror:NO];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)manageMountsPressed
+{
+    NSArray<NSString *> *paths = [DOEnvironmentManager sharedManager].fakeMountPaths;
+    if (paths.count == 0) {
+        [self showMountMessage:DOLocalizedString(@"Mount_No_Paths")];
+        return;
+    }
+
+    UIAlertController *list = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Mount_Manage_Title")
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    for (NSString *path in paths) {
+        [list addAction:[UIAlertAction actionWithTitle:path style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            UIAlertController *options = [UIAlertController alertControllerWithTitle:path message:nil preferredStyle:UIAlertControllerStyleAlert];
+            [options addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Mount_Unmount_Keep_Copy") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *innerAction) {
+                [self performMountPath:path mounted:NO deleteMirror:NO];
+            }]];
+            [options addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Mount_Unmount_Delete_Copy") style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *innerAction) {
+                [self performMountPath:path mounted:NO deleteMirror:YES];
+            }]];
+            [options addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Cancel") style:UIAlertActionStyleCancel handler:nil]];
+            [self presentViewController:options animated:YES completion:nil];
+        }]];
+    }
+    [list addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:list animated:YES completion:nil];
 }
 
 - (void)resetSettingsPressed

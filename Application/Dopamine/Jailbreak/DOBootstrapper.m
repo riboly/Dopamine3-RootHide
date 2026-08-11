@@ -41,15 +41,6 @@ struct hfs_mount_args {
 };
 
 NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
-typedef NS_ENUM(NSInteger, JBErrorCode) {
-    BootstrapErrorCodeFailedToGetURL            = -1,
-    BootstrapErrorCodeFailedToDownload          = -2,
-    BootstrapErrorCodeFailedDecompressing       = -3,
-    BootstrapErrorCodeFailedExtracting          = -4,
-    BootstrapErrorCodeFailedRemount             = -5,
-    BootstrapErrorCodeFailedFinalising          = -6,
-    BootstrapErrorCodeFailedReplacing           = -7,
-};
 
 #define BUFFER_SIZE 8192
 
@@ -1312,7 +1303,7 @@ int getCFMajorVersion(void)
     // Initial setup on first jailbreak
     if ([[NSFileManager defaultManager] fileExistsAtPath:jbrootPrefix(@"/prep_bootstrap.sh")]) {
         [[DOUIManager sharedInstance] sendLog:@"Finalizing Bootstrap" debug:NO];
-        int r = exec_cmd_trusted(JBROOT_PATH("/bin/sh"), "/prep_bootstrap.sh", NULL);
+        int r = exec_cmd_trusted(JBROOT_PATH("/bin/sh"), JBROOT_PATH("/prep_bootstrap.sh"), NULL);
         if (r != 0) {
             return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedFinalising userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"prep_bootstrap.sh returned %d\n", r]}];
         }
@@ -1342,7 +1333,7 @@ int getCFMajorVersion(void)
             }
         }
         
-        int r = exec_cmd_trusted(JBROOT_PATH("/bin/sh"), "/usr/libexec/updatelinks.sh", NULL);
+        int r = exec_cmd_trusted(JBROOT_PATH("/bin/sh"), JBROOT_PATH("/usr/libexec/updatelinks.sh"), NULL);
         if (r != 0) {
             return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedFinalising userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"updatelinks.sh returned %d\n", r]}];
         }

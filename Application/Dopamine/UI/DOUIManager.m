@@ -31,6 +31,12 @@
         _preferenceManager = [DOPreferenceManager sharedManager];
         _logRecord = [NSMutableArray new];
         _logLock = [NSLock new];
+
+        NSString *logPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Dopamine-jailbreak.log"];
+        NSString *previousLog = [NSString stringWithContentsOfFile:logPath encoding:NSUTF8StringEncoding error:nil];
+        if (previousLog.length != 0) {
+            [_logRecord addObjectsFromArray:[previousLog componentsSeparatedByString:@"\n"]];
+        }
     }
     return self;
 }
@@ -207,12 +213,28 @@
 
 - (void)sendLog:(NSString*)log debug:(BOOL)debug update:(BOOL)update
 {
-    if (!self.logView || !log)
+    if (!log)
         return;
 
     [_logLock lock];
 
     [self.logRecord addObject:log];
+
+    NSString *logPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Dopamine-jailbreak.log"];
+    NSFileHandle *logFile = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (!logFile) {
+        [[NSFileManager defaultManager] createFileAtPath:logPath contents:nil attributes:nil];
+        logFile = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    }
+    [logFile seekToEndOfFile];
+    [logFile writeData:[[NSString stringWithFormat:@"%@\n", log] dataUsingEncoding:NSUTF8StringEncoding]];
+    [logFile synchronizeFile];
+    [logFile closeFile];
+
+    if (!self.logView) {
+        [_logLock unlock];
+        return;
+    }
 
     BOOL isDebug = self.logView.class == DODebugLogView.class;
     if (debug && !isDebug) {

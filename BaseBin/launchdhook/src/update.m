@@ -127,13 +127,17 @@ void jbupdate_update_system_info(void)
 				"struct",
 				"physrw",
 				"perfkrw",
+				"IOSurface",
 				NULL,
 				NULL,
 				NULL,
 				NULL,	
 			};
 
-			uint32_t idx = 7;
+			uint32_t idx = 0;
+			while (sets[idx] != NULL) {
+				idx++;
+			}
 			if (xpf_set_is_supported("devmode")) {
 				sets[idx++] = "devmode"; 
 			}

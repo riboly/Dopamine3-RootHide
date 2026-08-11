@@ -1,87 +1,132 @@
-name: "*** build tipa file ***"
+name: Build roothide Dopamine
 
 on:
-  # schedule:
-  #   - cron: '0 */2 * * *' # every 2 hours
   workflow_dispatch:
   pull_request:
   push:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  THEOS: ${{ github.workspace }}/theos
+  THEOS_COMMIT: 88506b2c22e9e07dd4ed055f23c9e398a117a2c7
+  IOS_SDK_VERSION: "16.5"
+  TRUSTCACHE_COMMIT: aa0e8847529cf76576fce8d2dbc9e088c8f1a0df
+
 jobs:
   build:
     runs-on: macos-14
+    timeout-minutes: 60
+
     steps:
       - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Apply submodule patches
         run: |
-          set -x
-          git clone --recursive https://github.com/roothide/Dopamine2-roothide ${{ github.workspace }}
-          
-      - name: Install Procursus
+          set -euo pipefail
+          git -C BaseBin/XPF apply "$GITHUB_WORKSPACE/.github/patches/XPF-iosurface.patch"
+          git -C BaseBin/opainject apply "$GITHUB_WORKSPACE/.github/patches/opainject-build.patch"
+
+      # Xcode 15.4 is the last toolchain used by the original Dopamine 3
+      # project layout. Newer Xcodes treat some command-line targets as
+      # macOS/Catalyst targets and fail to resolve their Swift packages.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "15.4"
+
+      - name: Install Procursus tools
         uses: dhinakg/procursus-action@main
         with:
-          packages: ldid findutils sed coreutils make
+          packages: ldid findutils sed coreutils
 
-      - name: Install THEOS
+      - name: Install host dependencies
         run: |
-          set -x
-          export BASEDIR="$(pwd)"
-          export THEOS="${BASEDIR}/theos"
-          mkdir -p $THEOS
-          curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos >> install-theos.sh
-          gsed -E "/^\s*get_theos\s*$/,+1 s/^(\s*)(get_sdks)\s*$/\1mkdir -p \${THEOS}\/sdks\n\1touch \${THEOS}\/sdks\/sdk\n\1\2/g" -i install-theos.sh
-          bash install-theos.sh
-          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          gunzip $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar -C $THEOS/sdks
-          rm $THEOS/sdks/iPhoneOS16.5.sdk.tar
-          cd $BASEDIR
+          set -euo pipefail
+          brew install make libarchive openssl@3 xz
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Build and Install trustcache
-        run: |
-          set -x
-          git clone https://github.com/CRKatri/trustcache
-          cd trustcache
-          export CFLAGS="$CFLAGS -I$(brew --prefix openssl)/include -arch arm64"
-          export LDFLAGS="$LDFLAGS -L$(brew --prefix openssl)/lib -arch arm64"
-          gmake -j$(sysctl -n hw.physicalcpu) OPENSSL=1
-          sudo cp trustcache /opt/procursus/bin/
+      - name: Cache Theos
+        id: cache-theos
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.THEOS }}
+          key: theos-${{ runner.os }}-${{ runner.arch }}-${{ env.THEOS_COMMIT }}-sdk${{ env.IOS_SDK_VERSION }}
 
-      - name: Set Environment Variables
+      - name: Install Theos and iOS SDK
+        if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
-          set -x
-          T2=$(TZ=UTC-2 date +'%Y%m%d_%H%M%S')
-          TS=$(date -j -f "%Y%m%d_%H%M%S" "${T2}" +%s)
-          SHASH=$(git rev-parse --short HEAD)
-          echo "ctime=${T2}" >> $GITHUB_ENV
-          echo "ctimestamp=${TS}" >> $GITHUB_ENV
-          echo "shorthash=${SHASH}" >> $GITHUB_ENV
+          set -euo pipefail
+          git clone --recursive https://github.com/roothide/theos.git "$THEOS"
+          git -C "$THEOS" checkout --detach "$THEOS_COMMIT"
+          git -C "$THEOS" submodule update --init --recursive
 
-      - name: Install libarchive
+          mkdir -p "$THEOS/sdks"
+          sdk_archive="$RUNNER_TEMP/iPhoneOS${IOS_SDK_VERSION}.sdk.tar.xz"
+          curl --fail --location --retry 3 \
+            "https://github.com/theos/sdks/releases/latest/download/iPhoneOS${IOS_SDK_VERSION}.sdk.tar.xz" \
+            --output "$sdk_archive"
+          tar -xJf "$sdk_archive" -C "$THEOS/sdks"
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.swiftpm
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-xcode15.4-${{ hashFiles('**/Package.swift', '**/project.pbxproj') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-xcode15.4-
+
+      - name: Build trustcache
         run: |
-          brew install libarchive
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/trustcache"
+          git clone https://github.com/CRKatri/trustcache.git "$source_dir"
+          git -C "$source_dir" checkout --detach "$TRUSTCACHE_COMMIT"
+
+          openssl_prefix="$(brew --prefix openssl@3)"
+          make -C "$source_dir" -j"$(sysctl -n hw.logicalcpu)" OPENSSL=1 \
+            CFLAGS="-I${openssl_prefix}/include" \
+            LDFLAGS="-L${openssl_prefix}/lib"
+          make -C "$source_dir" install PREFIX="$HOME/.local"
+
+      - name: Verify build environment
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          test "$(xcrun --sdk iphoneos --show-sdk-version)" = "17.5"
+          test -d "$THEOS/sdks/iPhoneOS${IOS_SDK_VERSION}.sdk"
+          command -v make ldid trustcache
+          make --version | head -n 1
+          file "$(command -v trustcache)"
 
       - name: Build
         run: |
-          set -x
-          export BASEDIR="$(pwd)"
-          export THEOS="${BASEDIR}/theos"
-          typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
-          for ((i=0; i<$itemcount; i++)); do if [ "$(plutil -extract items.$i.headerCellClass raw ./Application/Dopamine/UI/Settings/Credits.plist)" = "DOCreditsCell" ]; then DOCreditsCellIndex=$i; break; fi; done;
-          plutil -insert items.$DOCreditsCellIndex.names -xml "<dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict>" -append ./Application/Dopamine/UI/Settings/Credits.plist
-          rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
-          gmake -j$(sysctl -n hw.physicalcpu)
-          VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
-          mv ./Application/Dopamine.tipa  "./Application/roothide-Dopamine-${VERSION}.tipa"
-          echo "version=${VERSION}" >> $GITHUB_ENV
+          set -euo pipefail
+          export CLANG_MODULE_CACHE_PATH="$RUNNER_TEMP/clang-module-cache"
+          mkdir -p "$CLANG_MODULE_CACHE_PATH"
+          make -j"$(sysctl -n hw.logicalcpu)" NIGHTLY=1
 
-      - name: Upload Artifact
-        id: dopamine-latest-upload
+          version="$(cat BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)"
+          artifact="roothide-Dopamine-${version}.tipa"
+          cp Application/Dopamine.tipa "Application/${artifact}"
+          echo "artifact=${artifact}" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: roothide-Dopamine-${{ env.version }}.tipa
-          path: |
-            ${{ github.workspace }}/Application/roothide-Dopamine-${{ env.version }}.tipa
+          name: ${{ env.artifact }}
+          path: Application/${{ env.artifact }}
+          if-no-files-found: error
+          retention-days: 14

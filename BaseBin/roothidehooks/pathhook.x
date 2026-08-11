@@ -11,6 +11,11 @@ CFURLRef (*orig__CFCopyHomeDirURLForUser)(const char *username, bool fallBackToH
 CFURLRef new__CFCopyHomeDirURLForUser(const char *username, bool fallBackToHome)
 {
 	CFURLRef url = orig__CFCopyHomeDirURLForUser(username, fallBackToHome);
+	if (!url) return NULL;
+
+	// CoreFoundation can query preferences before jbinfo has been installed in
+	// the process. In that state path conversion must remain a no-op.
+	if (!get_jbroot()) return url;
 
 	char path[PATH_MAX]={0};
 	if(CFURLGetFileSystemRepresentation(url, 0, (UInt8*)path, sizeof(path)))

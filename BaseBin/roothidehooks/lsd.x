@@ -233,7 +233,6 @@ static const void *kBlockSchemeTagKey = &kBlockSchemeTagKey;
 
 %end //%hook _LSDOpenClient
 
-%group UTTypeHooks
 
 @interface UTTypeRecord : NSObject
 + (id)typeRecordWithIdentifier:(id)identifier;
@@ -262,7 +261,7 @@ static const void *kBlockSchemeTagKey = &kBlockSchemeTagKey;
 static __thread BOOL g_utrHide = NO;   // raised by the _LSDReadClient hooks for blacklisted requests
 static __thread int  g_utrBusy = 0;    // >0 while we ourselves touch the DB, to keep our access out of the filters
 
-static BOOL utrFilterActive(void) { return g_utrHide && !g_utrBusy; }
+static __attribute__((unused)) BOOL utrFilterActive(void) { return g_utrHide && !g_utrBusy; }
 
 static pid_t utrClientPid(_LSDReadClient* client)
 {
@@ -270,7 +269,7 @@ static pid_t utrClientPid(_LSDReadClient* client)
 	return conn ? conn.processIdentifier : -1;
 }
 
-static BOOL utrHideClientBlacklisted(_LSDReadClient* client)
+static __attribute__((unused)) BOOL utrHideClientBlacklisted(_LSDReadClient* client)
 {
 	pid_t pid = utrClientPid(client);
 	if(pid>0 && jbclient_blacklist_check_pid(pid)) {
@@ -311,7 +310,7 @@ static BOOL utrRecordIsFromJailbreakApp(_UTDeclaredTypeRecord* rec)
 }
 
 // build a record for an enumerated unitID and decide if it belongs to a jailbreak app.
-static BOOL utrUnitIsJailbreak(void* db, intptr_t unitID)
+static __attribute__((unused)) BOOL utrUnitIsJailbreak(void* db, intptr_t unitID)
 {
 	BOOL result = NO;
 	g_utrBusy++; // keep our own nested DB access out of the filters
@@ -328,6 +327,7 @@ static BOOL utrUnitIsJailbreak(void* db, intptr_t unitID)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#if 0
 typedef intptr_t (^UTREnumBlock)(intptr_t a2, intptr_t unitID, const void* unitBytes, void* a5);
 %hookf(void, _UTEnumerateTypesForTag, void* db, void* tagClass, void* tag, id block)
 {
@@ -393,7 +393,9 @@ typedef void (^UTRConformBlock)(intptr_t unitID, const void* unitBytes, intptr_t
 	if (utrFilterActive()) return; // don't cache the hidden result
 	%orig(a1, block);
 }
+#endif
 
+#if 0
 %hook _LSDReadClient
 - (void)getTypeRecordWithTag:(id)tag ofClass:(id)_class conformingToIdentifier:(id)identifier completionHandler:(void(^)(id))handler
 {
@@ -476,8 +478,8 @@ typedef void (^UTRConformBlock)(intptr_t unitID, const void* unitBytes, intptr_t
 	g_utrHide = NO;
 }
 %end //%hook _LSDReadClient
+#endif
 
-%end // %group UTTypeHooks
 
 %hook _LSQueryContext
 
@@ -650,18 +652,6 @@ void lsdInit(void)
 	if(_LSServer_RebuildApplicationDatabases)
 	{
 		MSHookFunction(_LSServer_RebuildApplicationDatabases, (void *)&new_LSServer_RebuildApplicationDatabases, (void **)&orig_LSServer_RebuildApplicationDatabases);
-	}
-
-	void* _LSSchemaCacheRead = MSFindSymbol(coreServicesImage, "__LSSchemaCacheRead");
-	void* _LSSchemaCacheWrite = MSFindSymbol(coreServicesImage, "__LSSchemaCacheWrite");
-	void* _UTEnumerateTypesForTag = MSFindSymbol(coreServicesImage, "__UTEnumerateTypesForTag");
-	void* _UTEnumerateTypesForIdentifier = MSFindSymbol(coreServicesImage, "__UTEnumerateTypesForIdentifier");
-	void* _UTTypeSearchConformingTypesWithBlock = MSFindSymbol(coreServicesImage, "__UTTypeSearchConformingTypesWithBlock");
-	void* _UTTypeSearchConformsToTypesWithBlock = MSFindSymbol(coreServicesImage, "__UTTypeSearchConformsToTypesWithBlock");
-	if(_LSSchemaCacheRead && _LSSchemaCacheWrite && _UTEnumerateTypesForTag && _UTEnumerateTypesForIdentifier && _UTTypeSearchConformingTypesWithBlock && _UTTypeSearchConformsToTypesWithBlock)
-	{
-		NSLog(@"UTTypeHooks: installing");
-		%init(UTTypeHooks, _LSSchemaCacheRead=_LSSchemaCacheRead, _LSSchemaCacheWrite=_LSSchemaCacheWrite, _UTEnumerateTypesForTag=_UTEnumerateTypesForTag, _UTEnumerateTypesForIdentifier=_UTEnumerateTypesForIdentifier, _UTTypeSearchConformingTypesWithBlock=_UTTypeSearchConformingTypesWithBlock, _UTTypeSearchConformsToTypesWithBlock=_UTTypeSearchConformsToTypesWithBlock);
 	}
 
 	%init();

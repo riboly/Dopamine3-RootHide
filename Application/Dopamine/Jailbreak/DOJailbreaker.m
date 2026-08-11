@@ -23,7 +23,6 @@
 #import <libjailbreak/info.h>
 #import <libjailbreak/util.h>
 #import <libjailbreak/trustcache.h>
-#import <libjailbreak/kalloc_pt.h>
 #import <libjailbreak/jbserver_boomerang.h>
 #import <libjailbreak/signatures.h>
 #import <libjailbreak/jbclient_xpc.h>
@@ -33,6 +32,8 @@
 #import <CoreServices/LSApplicationProxy.h>
 #import <sys/utsname.h>
 #import "spawn.h"
+#import "clock_alarm.h"
+#import <IOSurface/IOSurfaceRef.h>
 int posix_spawnattr_set_registered_ports_np(posix_spawnattr_t * __restrict attr, mach_port_t portarray[], uint32_t count);
 
 #define kCFPreferencesNoContainer CFSTR("kCFPreferencesNoContainer")
@@ -81,13 +82,17 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
             "struct",
             "physrw",
             "perfkrw",
+			"IOSurface",
             NULL,
             NULL,
             NULL,
             NULL,
         };
 
-        uint32_t idx = 7;
+        uint32_t idx = 0;
+        while (sets[idx] != NULL) {
+            idx++;
+        }
         if (xpf_set_is_supported("devmode")) {
             sets[idx++] = "devmode"; 
         }
@@ -188,11 +193,6 @@ sets[idx] = NULL;
         if ([pplBypass run] != 0) {[pacBypass cleanup]; [kernelExploit cleanup]; return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedExploitation userInfo:@{NSLocalizedDescriptionKey:@"Failed to bypass PPL"}];}
         // At this point we presume the PPL bypass gave us unrestricted phys write primitives
     }
-    if (!gPrimitives.kalloc_global) {
-        // IOSurface kallocs don't work on iOS 16+, use leaked page tables as allocations instead
-        libjailbreak_kalloc_pt_init();
-    }
-    
     if (![DOEnvironmentManager sharedManager].isArm64e) {
         arm64_kcall_init();
     }
@@ -217,9 +217,10 @@ sets[idx] = NULL;
 
 - (NSError *)cleanUpExploits
 {
-    int r = [[DOExploitManager sharedManager] cleanUpExploits];
-    if (r != 0) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedCleanup userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to cleanup exploits: %d", r]}];
-    return nil;
+	int r = [[DOExploitManager sharedManager] cleanUpExploits];
+	if (r != 0) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedCleanup userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to cleanup exploits: %d", r]}];
+	IOSurface_map_cleanup();
+	return nil;
 }
 
 - (NSError *)elevatePrivileges
@@ -520,6 +521,23 @@ void *boomerang_server(struct boomerang_info *info)
     return [[DOEnvironmentManager sharedManager] finalizeBootstrap];
 }
 
+- (NSError *)cleanUpPostExploitation
+{
+    if (@available(iOS 17.0, *)) {
+        uint64_t proc = proc_self();
+        uint64_t ucred = proc_ucred(proc);
+
+        // Restore the temporary root credentials before returning to userspace.
+        kwrite32(ucred + koffsetof(ucred, svuid), 501);
+        kwrite32(ucred + koffsetof(ucred, ruid), 501);
+        kwrite32(ucred + koffsetof(ucred, uid), 501);
+        kwrite32(ucred + koffsetof(ucred, rgid), 501);
+        kwrite32(ucred + koffsetof(ucred, svgid), 501);
+        kwrite32(ucred + koffsetof(ucred, groups), 501);
+    }
+    return nil;
+}
+
 - (void)runWithError:(NSError **)errOut didRemoveJailbreak:(BOOL*)didRemove showLogs:(BOOL *)showLogs
 {
 
@@ -572,18 +590,28 @@ void *boomerang_server(struct boomerang_info *info)
     *errOut = [self elevatePrivileges];
     if (*errOut) return;
     *errOut = [self showNonDefaultSystemApps];
-    if (*errOut) return;
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
     *errOut = [self ensureDevModeEnabled];
-    if (*errOut) return;
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
 
     // Now that we are unsandboxed, populate the jailbreak root path
     *errOut = [[DOEnvironmentManager sharedManager] ensureJailbreakRootExists];
-    if (*errOut) return;
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
     
     if (removeJailbreakEnabled) {
         [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Removing Jailbreak") debug:NO];
         *errOut = [[DOEnvironmentManager sharedManager] deleteBootstrap];
         *didRemove = YES;
+        [self cleanUpPostExploitation];
         return;
     }
     
@@ -593,7 +621,10 @@ void *boomerang_server(struct boomerang_info *info)
     setenv("TERM", "xterm-256color", 1);
 
     *errOut = [[DOEnvironmentManager sharedManager] updateBootLogo];
-    if (*errOut) return;
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
     
     if (!tweaksEnabled) {
         printf("Creating safe mode marker file since tweaks were disabled in settings\n");
@@ -602,11 +633,17 @@ void *boomerang_server(struct boomerang_info *info)
     
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Loading BaseBin TrustCache") debug:NO];
     *errOut = [self loadBasebinTrustcache];
-    if (*errOut) return;
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
     
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Initializing Environment") debug:NO];
     *errOut = [self injectLaunchdHook];
-    if (*errOut) return;
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
     
 /*
     // Now that we can, protect important system files by bind mounting on top of them
@@ -653,7 +690,12 @@ setenv("DYLD_INSERT_LIBRARIES", JBROOT_PATH("/basebin/systemhook.dylib"), 1);
     exec_cmd_trusted(JBROOT_PATH("/usr/bin/killall"), "-9", "iconservicesagent", NULL);
     
     *errOut = [self finalizeBootstrapIfNeeded];
-    if (*errOut) return;
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
+
+    [[DOEnvironmentManager sharedManager] restoreFakeMounts];
     
     [[DOEnvironmentManager sharedManager] setIDownloadEnabled:idownloadEnabled needsUnsandbox:NO];
     
@@ -679,6 +721,124 @@ setenv("DYLD_INSERT_LIBRARIES", JBROOT_PATH("/basebin/systemhook.dylib"), 1);
 {
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Rebooting Userspace") debug:NO];
     [[DOEnvironmentManager sharedManager] rebootUserspace];
+}
+
+- (IOSurfaceRef)allocatePurpleGfxMemWithSize:(size_t)size
+{
+    NSDictionary *surfaceProperties = @{
+        @"IOSurfaceMemoryRegion" : @"PurpleGfxMem",
+        @"IOSurfaceAllocSize" : @(size),
+    };
+    return IOSurfaceCreate((__bridge CFDictionaryRef)surfaceProperties);
+}
+
+- (BOOL)surfaceIsContiguous:(IOSurfaceRef)surface
+{
+    vm_address_t mem_addr = (vm_address_t)IOSurfaceGetBaseAddress(surface);
+    vm_size_t mem_size = (vm_size_t)IOSurfaceGetAllocSize(surface);
+    vm_region_submap_short_info_data_64_t info = {0};
+    uint32_t count = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64;
+    natural_t depth = 9999999;
+
+    kern_return_t kr = vm_region_recurse_64(mach_task_self(), &mem_addr, &mem_size, &depth, (vm_region_recurse_info_t)&info, &count);
+    return (kr == 0 && info.share_mode == SM_EMPTY && info.object_id != 0);
+}
+
+- (BOOL)contiguousMappingWorks
+{
+    IOSurfaceRef surface = [self allocatePurpleGfxMemWithSize:0x8000];
+    if (surface == NULL) return false;
+
+    BOOL contiguous = [self surfaceIsContiguous:surface];
+    CFRelease(surface);
+    return contiguous;
+}
+
+- (BOOL)contiguousMappingWorkaroundNeeded
+{
+    DOExploit *kernelExploit = [DOExploitManager sharedManager].selectedKernelExploit;
+    if ([kernelExploit hasRequirement:@"contiguousMapping"]) {
+        return ![self contiguousMappingWorks];
+    }
+    return NO;
+}
+
+- (int)crashBackboardd
+{
+#pragma pack(push, 4)
+    typedef struct {
+        mach_msg_header_t header;
+        mach_msg_body_t body;
+        mach_msg_ool_descriptor_t archive;
+        NDR_record_t ndr;
+        mach_msg_type_number_t archiveLength;
+    } Request;
+#pragma pack(pop)
+
+    kern_return_t bootstrap_look_up(mach_port_t, const char *, mach_port_t *);
+
+    NSData *archive =
+        [NSKeyedArchiver archivedDataWithRootObject:@[ @[] ]
+                              requiringSecureCoding:YES
+                                              error:nil];
+    mach_port_t bootstrap = MACH_PORT_NULL;
+    mach_port_t service = MACH_PORT_NULL;
+
+    if (!archive ||
+        task_get_bootstrap_port(mach_task_self(), &bootstrap) != KERN_SUCCESS ||
+        bootstrap_look_up(bootstrap, "com.apple.backboard.hid.services", &service) != KERN_SUCCESS) {
+        return -1;
+    }
+
+    Request request = {0};
+    request.header.msgh_bits =
+        MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0) | MACH_MSGH_BITS_COMPLEX;
+    request.header.msgh_size = sizeof(request);
+    request.header.msgh_remote_port = service;
+    request.header.msgh_id = 6000032;
+    request.body.msgh_descriptor_count = 1;
+    request.archive.address = (void *)archive.bytes;
+    request.archive.size = (mach_msg_size_t)archive.length;
+    request.archive.copy = MACH_MSG_VIRTUAL_COPY;
+    request.archive.type = MACH_MSG_OOL_DESCRIPTOR;
+    request.ndr = NDR_record;
+    request.archiveLength = (mach_msg_type_number_t)archive.length;
+
+    (void)mach_msg(&request.header,
+                   MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+                   request.header.msgh_size,
+                   0,
+                   MACH_PORT_NULL,
+                   1000,
+                   MACH_PORT_NULL);
+
+    mach_port_deallocate(mach_task_self(), service);
+    return 0;
+}
+
+- (void)applyContiguousMappingWorkaround
+{
+    [self crashBackboardd];
+
+    IOSurfaceRef surface = NULL;
+    do {
+        if (surface) {
+            CFRelease(surface);
+            surface = NULL;
+            usleep(50);
+        }
+        surface = [self allocatePurpleGfxMemWithSize:0x8000];
+    }
+    while (![self surfaceIsContiguous:surface]);
+
+    printf("Got contiguous mapping surface %p\n", surface);
+
+    mach_port_t surfacePort = IOSurfaceCreateMachPort(surface);
+    kern_return_t kr = clock_alarm_preserve_port(surfacePort, 20);
+    mach_port_mod_refs(mach_task_self(), surfacePort, MACH_PORT_RIGHT_SEND, -1);
+    CFRelease(surface);
+
+    printf("preserved port? %d\n", kr);
 }
 
 @end

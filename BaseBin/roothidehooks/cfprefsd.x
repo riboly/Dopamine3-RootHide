@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <substrate.h>
+#include <dlfcn.h>
 #include <roothide.h>
 #include "common.h"
 
@@ -104,7 +105,8 @@ void* DISPATCH_orig__CFPrefsDaemon_handleMessage_fromPeer_replyHandler__(id self
 void* new__CFPrefsDaemon_handleMessage_fromPeer_replyHandler__(id self, xpc_object_t message, xpc_connection_t connection, void* replyHandler)
 {
     uid_t clientUid = xpc_connection_get_euid(connection);
-    pid_t clientPid = xpc_connection_get_pid(connection);
+    pid_t (*getConnectionPid)(xpc_connection_t) = (pid_t (*)(xpc_connection_t))dlsym(RTLD_DEFAULT, "xpc_connection_get_pid");
+    pid_t clientPid = getConnectionPid ? getConnectionPid(connection) : -1;
 
 	NSLog(@"CFPrefsDaemon: handleMessage %p/%d pid=%d uid=%d proc=%s", message, xpc_get_type(message)==XPC_TYPE_DICTIONARY, clientPid, clientUid, proc_get_path(clientPid,NULL));
 

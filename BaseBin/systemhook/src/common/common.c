@@ -16,6 +16,7 @@
 #include <libjailbreak/jbroot.h>
 #include <libjailbreak/hookd.h>
 #include <libkern/OSCacheControl.h>
+#include <os/log.h>
 
 bool string_has_prefix(const char *str, const char* prefix)
 {
@@ -118,8 +119,15 @@ xpc_object_t jbuserconfig_get_value(const char *key)
 	return NULL;
 }
 
-static kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
+kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
+	// APT transport helpers are short-lived native executables. They must be
+	// trusted, but injecting systemhook can make dyld abort before startup.
+	if (path && strstr(path, "/usr/libexec/apt/methods/") != NULL) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C32] trust-only APT helper path=%{public}s", path);
+		return kSpawnConfigTrust;
+	}
+
 	// Blacklist to ensure general system stability
 	// I don't like this but for some processes it seems neccessary
 	const char *processBlacklist[] = {
@@ -143,6 +151,16 @@ static kSpawnConfig spawn_config_for_executable(const char* path, char *const ar
 	}
 
 	return (kSpawnConfigInject | kSpawnConfigTrust);
+}
+
+int __posix_spawn_orig(pid_t *restrict pid, const char *restrict path, struct _posix_spawn_args_desc *desc, char *const argv[restrict], char *const envp[restrict])
+{
+	return syscall(SYS_posix_spawn, pid, path, desc, argv, envp);
+}
+
+int __execve_orig(const char *path, char *const argv[], char *const envp[])
+{
+	return syscall(SYS_execve, path, argv, envp);
 }
 
 // 1. Ensure the binary about to be spawned and all of it's dependencies are trust cached
@@ -353,7 +371,7 @@ static int spawn_exec_hook_common(bool isExec,
 	}
 
 	if (personaFixUid == 0 || personaFixGid == 0 && childPid != -1) {
-		jbclient_persona_fix(childPid, personaFixUid, personaFixGid);
+		jbclient_fork_fix(childPid);
 		if (personaFixNeedsResume) {
 			kill(childPid, SIGCONT);
 		}

@@ -1,5 +1,21 @@
 #include "common.h"
 #include "roothider.h"
+#include <os/log.h>
+
+static const char kAPTTrustBuildMarker[] __attribute__((used)) = "APTTRUST-7C31";
+
+static int trust_executable_recurse_no_arch(const char *path)
+{
+	bool trace = path && strstr(path, "/.jbroot-");
+	if (trace) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] systemhook trust begin path=%{public}s", path);
+	}
+	int result = jbclient_trust_executable_recurse(path, NULL);
+	if (trace) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] systemhook trust end result=%d path=%{public}s", result, path);
+	}
+	return result;
+}
 
 #include <mach-o/dyld.h>
 #include <mach-o/dyld_images.h>
@@ -250,18 +266,18 @@ if (msSafeModeValue) {
 
 int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path, struct _posix_spawn_args_desc *desc, char *const argv[restrict], char * const envp[restrict])
 {
-	return roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, jbclient_trust_file_by_path, jbclient_platform_set_process_debugged, jbclient_jbsettings_get_double("jetsamMultiplier"));
+	return roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, trust_executable_recurse_no_arch, jbclient_platform_set_process_debugged, jbclient_jbsettings_get_double("jetsamMultiplier"));
 }
 
 int __posix_spawn_hook_with_filter(pid_t *restrict pid, const char *restrict path, char *const argv[restrict], char * const envp[restrict], struct _posix_spawn_args_desc *desc, int *ret)
 {
-	*ret = roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, jbclient_trust_file_by_path, jbclient_platform_set_process_debugged, jbclient_jbsettings_get_double("jetsamMultiplier"));
+	*ret = roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, trust_executable_recurse_no_arch, jbclient_platform_set_process_debugged, jbclient_jbsettings_get_double("jetsamMultiplier"));
 	return 1;
 }
 
 int __execve_hook(const char *path, char *const argv[], char *const envp[])
 {
-	return roothide_systemhook___execve_prehook(path, argv, envp, (void *)roothide_systemhook___execve_posthook, jbclient_trust_file_by_path);
+	return roothide_systemhook___execve_prehook(path, argv, envp, (void *)roothide_systemhook___execve_posthook, trust_executable_recurse_no_arch);
 }
 
 const struct mach_header_64 *get_dyld_mach_header(void)

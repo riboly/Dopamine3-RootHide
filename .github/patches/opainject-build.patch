@@ -1,0 +1,30 @@
+diff --git a/Makefile b/Makefile
+index 503b5c0..6b893c6 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,4 @@
+-TARGET := iphone:clang:16.5:11.0
++TARGET := iphone:clang:latest:11.0
+ ARCHS = arm64 arm64e
+ 
+ include $(THEOS)/makefiles/common.mk
+@@ -9,6 +9,5 @@ opainject_FILES = main.m dyld.m shellcode_inject.m rop_inject.m thread_utils.m t
+ opainject_CFLAGS = -fobjc-arc -DTHEOS_LEAN_AND_MEAN
+ opainject_CODESIGN_FLAGS = -Sentitlements.plist
+ opainject_INSTALL_PATH = /usr/local/bin
+-opainject_PRIVATE_FRAMEWORKS = CoreSymbolication
+ 
+ include $(THEOS_MAKE_PATH)/tool.mk
+diff --git a/arm64.h b/arm64.h
+index 3a08f8f..463ac05 100644
+--- a/arm64.h
++++ b/arm64.h
+@@ -3,6 +3,7 @@
+ 
+ #include <stdio.h>
+ #include <stdbool.h>
++#include <stdint.h>
+ 
+ uint32_t generate_movk(uint8_t x, uint16_t val, uint16_t lsl);
+ uint32_t generate_br(uint8_t x);
+

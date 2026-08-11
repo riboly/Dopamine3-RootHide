@@ -12,6 +12,7 @@
 #import <sys/mount.h>
 #import <sys/utsname.h>
 #import <sys/stat.h>
+#import <errno.h>
 #import <unistd.h>
 #import <mach-o/dyld.h>
 #import <libgrabkernel2/libgrabkernel2.h>
@@ -211,7 +212,7 @@ int reboot3(uint64_t flags, ...);
 - (NSString *)versionSupportString
 {
     if ([self isArm64e]) {
-        return @"iOS 15.0 - 16.5.1 (arm64e)";
+        return @"iOS 15.0 - 16.6.1 (arm64e)";
     }
     else {
         return @"iOS 15.0 - 15.8.6 / 16.0 - 16.6.1 (arm64)";
@@ -245,6 +246,16 @@ int reboot3(uint64_t flags, ...);
         jailbroken = csFlags & CS_PLATFORM_BINARY;
     });
     return jailbroken;
+}
+
+- (BOOL)isJailbrokenWithOtherJailbreak
+{
+    if (![self isJailbroken]) {
+        uint32_t csFlags = 0;
+        csops(getpid(), CS_OPS_STATUS, &csFlags, sizeof(csFlags));
+        return csFlags & CS_PLATFORM_BINARY;
+    }
+    return NO;
 }
 
 - (NSString *)jailbrokenVersion
@@ -749,6 +760,64 @@ int reboot3(uint64_t flags, ...);
             }];
         }];
         return nil;
+    }
+}
+
+- (NSString *)fakeMountConfigurationPath
+{
+    return JBROOT_PATH(@"/mnt/newFakePath.plist");
+}
+
+- (NSArray<NSString *> *)fakeMountPaths
+{
+    __block NSArray<NSString *> *paths = @[];
+    [self runAsRoot:^{
+        [self runUnsandboxed:^{
+            NSDictionary *configuration = [NSDictionary dictionaryWithContentsOfFile:self.fakeMountConfigurationPath];
+            if ([configuration[@"path"] isKindOfClass:[NSArray class]]) paths = configuration[@"path"];
+        }];
+    }];
+    return paths;
+}
+
+- (BOOL)saveFakeMountPaths:(NSArray<NSString *> *)paths
+{
+    __block BOOL success = NO;
+    [self runAsRoot:^{
+        [self runUnsandboxed:^{
+            NSString *configurationPath = self.fakeMountConfigurationPath;
+            [[NSFileManager defaultManager] createDirectoryAtPath:[configurationPath stringByDeletingLastPathComponent]
+                                      withIntermediateDirectories:YES attributes:nil error:nil];
+            success = [@{@"path" : paths ?: @[]} writeToFile:configurationPath atomically:YES];
+        }];
+    }];
+    return success;
+}
+
+- (int)setFakeMountPath:(NSString *)path mounted:(BOOL)mounted deleteMirror:(BOOL)deleteMirror
+{
+    NSString *standardPath = path.stringByStandardizingPath;
+    if (![path isEqualToString:standardPath] || ![path hasPrefix:@"/"] || [path isEqualToString:@"/"]) return EINVAL;
+
+    __block int result = EPERM;
+    [self runAsRoot:^{
+        [self runUnsandboxed:^{
+            result = exec_cmd(JBROOT_PATH("/basebin/jbctl"), "internal", mounted ? "mount" : "unmount",
+                              standardPath.fileSystemRepresentation, NULL);
+            if (!mounted && deleteMirror && result == 0) {
+                NSString *mirrorPath = [JBROOT_PATH(@"/mnt") stringByAppendingString:standardPath];
+                [[NSFileManager defaultManager] removeItemAtPath:mirrorPath error:nil];
+            }
+        }];
+    }];
+    return result;
+}
+
+- (void)restoreFakeMounts
+{
+    for (NSString *path in self.fakeMountPaths) {
+        int result = [self setFakeMountPath:path mounted:YES deleteMirror:NO];
+        if (result != 0) NSLog(@"Failed restoring fake mount %@: %d", path, result);
     }
 }
 
