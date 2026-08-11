@@ -424,8 +424,13 @@ void *boomerang_server(struct boomerang_info *info)
         return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"opainject failed with error code %d", r]}];
     }
 
-    // Wait for everything to finish
-    dispatch_semaphore_wait(info.boomerangDone, DISPATCH_TIME_FOREVER);
+    // A broken launchd handoff must return an error instead of leaving the UI
+    // blocked forever after opainject has already exited.
+    dispatch_time_t handoffDeadline = dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC);
+    if (dispatch_semaphore_wait(info.boomerangDone, handoffDeadline) != 0) {
+        mach_port_deallocate(mach_task_self(), serverPort);
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : @"Timed out waiting for launchd primitive handoff"}];
+    }
     mach_port_deallocate(mach_task_self(), serverPort);
 
     return nil;

@@ -28,6 +28,7 @@ bool gInEarlyBoot = true;
 #define abort_with_reason(reason_namespace,reason_code,reason_string,reason_flags)  launchd_panic("%s",reason_string)
 void roothide_launchd_preinit();
 void roothide_launchd_postinit(bool firstLoad);
+bool roothide_is_ios16_or_newer(void);
 
 extern void systemwide_domain_set_enabled(bool enabled);
 
@@ -63,7 +64,7 @@ int sysctlbyname_hook(const char *name, void *oldp, size_t *oldlenp, void *newp,
 {
 /*********************** roothide specific ********************/
 #ifdef __arm64e__
-	if (!__builtin_available(iOS 16.0, *))
+	if (!roothide_is_ios16_or_newer())
 	{
 		if (strcmp(name, "vm.shared_region_pivot") == 0) {
 			return 0;

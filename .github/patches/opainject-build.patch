@@ -296,6 +296,13 @@ index 77acb84..f125a72 100644
 \ No newline at end of file
 +	return KERN_SUCCESS;
 +}
+diff --git a/main.m b/main.m
+index 6db6b75..64a608b 100644
+--- a/main.m
++++ b/main.m
+@@ -98,0 +99 @@ int main(int argc, char *argv[], char *envp[]) {
++		printf("[opainject-build] launchd-availability-v3\n");
+
 diff --git a/thread_utils.m b/thread_utils.m
 index 5339972..58784c6 100644
 --- a/thread_utils.m

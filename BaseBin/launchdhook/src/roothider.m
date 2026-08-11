@@ -2,7 +2,9 @@
 
 #include <spawn.h>
 #include <substrate.h>
+#include <stdlib.h>
 #include <sys/sysctl.h>
+#include <sys/utsname.h>
 
 #include <libjailbreak/libjailbreak.h>
 #include <libjailbreak/roothider.h>
@@ -84,6 +86,16 @@ extern xpc_object_t new_xpc_dictionary_create_reply(xpc_object_t original);
 extern int (*orig_xpc_pipe_routine_reply)(xpc_object_t reply);
 extern int new_xpc_pipe_routine_reply(xpc_object_t reply);
 
+// Avoid libSystem's availability helper while launchd is being injected. On
+// iOS 16, Darwin's major version is 22; this check has no dispatch/runtime
+// state that can be held by another suspended launchd thread.
+bool roothide_is_ios16_or_newer(void)
+{
+	struct utsname systemInfo = {0};
+	if (uname(&systemInfo) != 0) return false;
+	return strtol(systemInfo.release, NULL, 10) >= 22;
+}
+
 void roothide_launchd_preinit()
 {
 	JBLogDebug("roothide_launchd_preinit");
@@ -107,13 +119,13 @@ void roothide_launchd_postinit(bool firstLoad)
 	{
 		HOOK_DYLIB_PATH = "";
 		
-		if (__builtin_available(iOS 16.0, *))
+		if (roothide_is_ios16_or_newer())
 		{
 			hideDeveloperMode();
 		}
 		
 #ifdef __arm64e__
-		if (!__builtin_available(iOS 16.0, *))
+		if (!roothide_is_ios16_or_newer())
 		{
 			if(roothide_config_set_spinlock_fix(dyld_patch_enabled()) != 0) {
 				launchd_panic("roothide_config_set_spinlock_fix failed");
@@ -138,7 +150,7 @@ void roothide_launchd_postinit(bool firstLoad)
 		asprintf(&HOOK_DYLIB_PATH, "/usr/lib/systemhook-%016llX.dylib", jbinfo(jbrand));
 	}
 
-	if (__builtin_available(iOS 16.0, *))
+	if (roothide_is_ios16_or_newer())
 	{
 		void* __sysctl_orig = NULL;
 		void* __sysctlbyname_orig = NULL;
