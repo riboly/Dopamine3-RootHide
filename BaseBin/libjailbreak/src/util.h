@@ -12,6 +12,7 @@
 
 const struct mach_header *get_mach_header(const char *name);
 bool host_is_arm64e(void);
+bool is_dopamine_app(const char *pathC);
 void proc_iterate(void (^itBlock)(uint64_t, bool*));
 
 uint64_t proc_self(void);

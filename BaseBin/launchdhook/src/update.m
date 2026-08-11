@@ -219,6 +219,11 @@ void jbupdate_finalize_stage2(const char *prevVersion, const char *newVersion)
 		reboot(0);
 	}
 
+	if (strcmp(prevVersion, "3.0") < 0 && strcmp(newVersion, "3.0") >= 0) {
+		// Dopamine 3 changed the PPL user mapping and cannot be updated live from 2.x.
+		reboot(0);
+	}
+
 	// Legacy, this file is no longer used
 	if (!access(JBROOT_PATH("/basebin/.idownloadd_enabled"), F_OK)) {
 		remove(JBROOT_PATH("/basebin/.idownloadd_enabled"));

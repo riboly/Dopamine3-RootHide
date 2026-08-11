@@ -3,6 +3,31 @@
 #import "util.h"
 #import <sys/stat.h>
 
+bool is_dopamine_app(const char *pathC)
+{
+	if (!pathC || !jbinfo(appIdentifier)) return false;
+
+	const char wantedPrefixC[] = "/private/var/containers/Bundle/Application/";
+	if (strncmp(pathC, wantedPrefixC, sizeof(wantedPrefixC) - 1) != 0) return false;
+	if (strstr(pathC, "/../")) return false;
+
+	uint64_t slashNum = 0;
+	for (uint64_t idx = 0; pathC[idx] != 0; idx++) {
+		if (pathC[idx] == '/') slashNum++;
+	}
+	if (slashNum != 8) return false;
+
+	@autoreleasepool {
+		NSString *path = [NSString stringWithUTF8String:pathC];
+		if (!path) return false;
+
+		NSString *infoPlistPath = [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"Info.plist"];
+		NSDictionary *infoPlist = [NSDictionary dictionaryWithContentsOfFile:infoPlistPath];
+		NSString *bundleIdentifier = infoPlist[@"CFBundleIdentifier"];
+		return bundleIdentifier && !strcmp(bundleIdentifier.UTF8String, jbinfo(appIdentifier));
+	}
+}
+
 NSString *NSPrebootUUIDPath(NSString *relativePath)
 {
 	@autoreleasepool {
