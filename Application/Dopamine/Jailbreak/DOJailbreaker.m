@@ -419,6 +419,7 @@ void *boomerang_server(struct boomerang_info *info)
     } while (!WIFEXITED(status) && !WIFSIGNALED(status));
 
     // Inject launchdhook.dylib into launchd via opainject
+    printf("[launchdhook-build] launchd-availability-v3\n");
     int r = exec_cmd(JBROOT_PATH("/basebin/opainject"), "1", JBROOT_PATH("/basebin/launchdhook.dylib"), NULL);
     if (r != 0) {
         return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"opainject failed with error code %d", r]}];
