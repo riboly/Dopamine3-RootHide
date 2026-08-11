@@ -14,13 +14,19 @@ all:
 	@$(MAKE) -C BaseBin
 	@$(MAKE) -C Packages
 	@$(MAKE) -C Application
+
+ifeq ($(BUILD_STANDALONE), 1)
 	@$(MAKE) -C Standalone
+endif
 
 clean:
 	@$(MAKE) -C BaseBin clean
 	@$(MAKE) -C Packages clean
 	@$(MAKE) -C Application clean
+
+ifeq ($(BUILD_STANDALONE), 1)
 	@$(MAKE) -C Standalone clean
+endif
 
 update: all
 	ssh $(DEVICE) "rm -rf /var/mobile/Documents/Dopamine.tipa"
