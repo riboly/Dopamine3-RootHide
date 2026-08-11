@@ -13,6 +13,7 @@
 "Menu_Settings_Title" = "设置";
 "Menu_Restart_SpringBoard_Title" = "重启 SpringBoard";
 "Menu_Reboot_Userspace_Title" = "重启用户空间";
+"Menu_Reboot_Device_Title" = "重启设备";
 "Menu_Credits_Title" = "关于";
 
 // Updating
@@ -76,6 +77,7 @@
 "Button_Change" = "修改";
 "Button_Cancel" = "取消";
 "Button_Continue" = "继续";
+"Alert_Reboot_Device_Body" = "设备将重新启动，越狱会暂时失效，需再次执行越狱才能恢复。是否继续？";
 
 // Duplicate Apps Errors
 "Duplicate_Apps_Error_Dopamine_App" = "检测到多个标识符为 \"%@\" 的 App 在 Dopamine 的 App 目录中 (\"%@\")，无法继续。";

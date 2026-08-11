@@ -13,6 +13,7 @@
 "Menu_Settings_Title" = "設置";
 "Menu_Restart_SpringBoard_Title" = "註銷";
 "Menu_Reboot_Userspace_Title" = "用戶空間重啟";
+"Menu_Reboot_Device_Title" = "重新啟動裝置";
 "Menu_Credits_Title" = "關於";
 
 // Updating
@@ -74,6 +75,7 @@
 /*Button_Change*/
 "Button_Cancel" = "取消";
 /*Button_Continue*/
+"Alert_Reboot_Device_Body" = "裝置將重新啟動，越獄會暫時失效，需再次執行越獄才能恢復。是否繼續？";
 
 // Duplicate Apps Errors
 /*Duplicate_Apps_Error_Dopamine_App*/
@@ -112,4 +114,3 @@
 "Status_Title_Select_Package_Managers" = "選定包管理器（越獄商店）";
 "Select_Package_Managers_Install_Message" = "若不確定如何選擇，請使用 Sileo";
 "Continue" = "繼續";
-

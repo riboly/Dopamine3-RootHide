@@ -13,6 +13,7 @@
 "Menu_Settings_Title" = "設定";
 "Menu_Restart_SpringBoard_Title" = "重新啟動主畫面";
 "Menu_Reboot_Userspace_Title" = "重新啟動使用者空間";
+"Menu_Reboot_Device_Title" = "重新啟動裝置";
 "Menu_Credits_Title" = "致謝";
 
 // Updating
@@ -77,6 +78,7 @@
 "Button_Change" = "更改";
 "Button_Cancel" = "取消";
 "Button_Continue" = "繼續";
+"Alert_Reboot_Device_Body" = "裝置將重新啟動，越獄會暫時失效，需再次執行越獄才能恢復。是否繼續？";
 
 // Duplicate Apps Errors
 "Duplicate_Apps_Error_Dopamine_App" = "Dopamines 應用程式目錄 (\"%@\") 內有多個識別碼為 \"%@\" 的應用程式。無法繼續。";
