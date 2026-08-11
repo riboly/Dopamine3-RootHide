@@ -97,7 +97,7 @@ jobs:
 
           openssl_prefix="$(brew --prefix openssl@3)"
           make -C "$source_dir" -j"$(sysctl -n hw.logicalcpu)" OPENSSL=1 \
-            CFLAGS="-I${openssl_prefix}/include" \
+            CFLAGS="-DOPENSSL -I${openssl_prefix}/include" \
             LDFLAGS="-L${openssl_prefix}/lib"
           make -C "$source_dir" install PREFIX="$HOME/.local"
 
