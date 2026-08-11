@@ -9,6 +9,7 @@
 #include <paths.h>
 #include <sys/stat.h>
 #include <dlfcn.h>
+#include <os/log.h>
 #include "common/envbuf.h"
 #include "private.h"
 #include <libjailbreak/jbclient_xpc.h>
@@ -59,8 +60,20 @@ void string_enumerate_components(const char *string, const char *separator, void
 	free(stringCopy);
 }
 
+bool is_apt_transport_path(const char *path)
+{
+	return path && strstr(path, "/apt/methods/") != NULL;
+}
+
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
+	// APT transports are short-lived native helpers. Trust their dependency
+	// tree, but never inject systemhook or suspend them for patching.
+	if (is_apt_transport_path(path)) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C33] trust-only APT helper path=%{public}s", path);
+		return kSpawnConfigTrust;
+	}
+
 	// Blacklist to ensure general system stability
 	// I don't like this but for some processes it seems neccessary
 	const char *processBlacklist[] = {

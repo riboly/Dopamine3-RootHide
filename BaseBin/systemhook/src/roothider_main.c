@@ -284,7 +284,7 @@ int roothide_systemhook___posix_spawn_posthook(pid_t *restrict pidp, const char 
 
 	if(!jbclient_dyld_patch_enabled())
 	{
-		if (spawnConfig & kSpawnConfigTrust) {
+		if (spawnConfig & kSpawnConfigInject) {
 			trust_insert_libraries(envc);
 		}
 	}
