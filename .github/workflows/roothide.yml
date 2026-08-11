@@ -135,7 +135,7 @@ jobs:
           mkdir -p artifacts
           cp BaseBin/systemhook/systemhook.dylib artifacts/systemhook.dylib
           file artifacts/systemhook.dylib
-          strings artifacts/systemhook.dylib | grep -F "APTTRUST-7C35"
+          strings artifacts/systemhook.dylib | grep -F "APTTRUST-7C36"
 
       - name: Full build TIPA
         if: env.BUILD_MODE == 'full'

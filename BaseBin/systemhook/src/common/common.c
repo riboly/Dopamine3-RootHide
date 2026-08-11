@@ -129,7 +129,7 @@ static bool is_apt_helper_path(const char *path)
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
 	if (is_apt_helper_path(path)) {
-		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C35] trust-only APT transport path=%{public}s", path);
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C36] trust-only APT transport path=%{public}s", path);
 		return kSpawnConfigTrust;
 	}
 

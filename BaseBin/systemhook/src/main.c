@@ -1,18 +1,76 @@
 #include "common.h"
 #include "roothider.h"
+#include <dirent.h>
+#include <limits.h>
 #include <os/log.h>
 
-static const char kAPTTrustBuildMarker[] __attribute__((used)) = "APTTRUST-7C35";
+static const char kAPTTrustBuildMarker[] __attribute__((used)) = "APTTRUST-7C36";
+
+static bool path_has_suffix(const char *path, const char *suffix)
+{
+	if (!path || !suffix) return false;
+	size_t pathLength = strlen(path);
+	size_t suffixLength = strlen(suffix);
+	return pathLength >= suffixLength && strcmp(path + pathLength - suffixLength, suffix) == 0;
+}
+
+static void trust_apt_runtime(const char *aptGetPath)
+{
+	static const char aptGetSuffix[] = "/usr/bin/apt-get";
+	if (!path_has_suffix(aptGetPath, aptGetSuffix)) return;
+
+	size_t rootLength = strlen(aptGetPath) - strlen(aptGetSuffix);
+	if (rootLength == 0 || rootLength >= PATH_MAX) return;
+
+	char jbroot[PATH_MAX];
+	memcpy(jbroot, aptGetPath, rootLength);
+	jbroot[rootLength] = '\0';
+
+	const char *requiredTools[] = {
+		"/usr/bin/dpkg",
+		"/usr/bin/dpkg-deb",
+	};
+	for (size_t i = 0; i < sizeof(requiredTools) / sizeof(requiredTools[0]); i++) {
+		char toolPath[PATH_MAX];
+		if (snprintf(toolPath, sizeof(toolPath), "%s%s", jbroot, requiredTools[i]) >= sizeof(toolPath)) continue;
+		int result = jbclient_trust_executable_recurse(toolPath, NULL);
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C36] pretrust result=%d path=%{public}s", result, toolPath);
+	}
+
+	char methodsPath[PATH_MAX];
+	if (snprintf(methodsPath, sizeof(methodsPath), "%s/usr/libexec/apt/methods", jbroot) >= sizeof(methodsPath)) return;
+
+	DIR *methods = opendir(methodsPath);
+	if (!methods) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C36] methods open failed errno=%d path=%{public}s", errno, methodsPath);
+		return;
+	}
+
+	struct dirent *entry;
+	while ((entry = readdir(methods)) != NULL) {
+		if (entry->d_name[0] == '.') continue;
+
+		char candidatePath[PATH_MAX];
+		if (snprintf(candidatePath, sizeof(candidatePath), "%s/%s", methodsPath, entry->d_name) >= sizeof(candidatePath)) continue;
+
+		char resolvedPath[PATH_MAX];
+		const char *trustPath = realpath(candidatePath, resolvedPath) ? resolvedPath : candidatePath;
+		int result = jbclient_trust_executable_recurse(trustPath, NULL);
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C36] pretrust result=%d path=%{public}s", result, trustPath);
+	}
+	closedir(methods);
+}
 
 static int trust_executable_recurse_no_arch(const char *path)
 {
 	bool trace = path && strstr(path, "/.jbroot-");
 	if (trace) {
-		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C35] systemhook trust begin path=%{public}s", path);
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C36] systemhook trust begin path=%{public}s", path);
 	}
 	int result = jbclient_trust_executable_recurse(path, NULL);
+	trust_apt_runtime(path);
 	if (trace) {
-		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C35] systemhook trust end result=%d path=%{public}s", result, path);
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C36] systemhook trust end result=%d path=%{public}s", result, path);
 	}
 	return result;
 }
