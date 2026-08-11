@@ -125,6 +125,14 @@ jobs:
             file "$(command -v trustcache)"
           fi
 
+      - name: Verify RootHide systemhook path contract
+        run: |
+          set -euo pipefail
+          ! grep -R -n -E '^#define HOOK_DYLIB_PATH[[:space:]]+"/usr/lib/systemhook\.dylib"' \
+            BaseBin/systemhook/src
+          grep -F 'extern const char *HOOK_DYLIB_PATH;' \
+            BaseBin/systemhook/src/common/common.h
+
       - name: Focused build systemhook
         if: env.BUILD_MODE == 'focused'
         run: |
@@ -135,7 +143,7 @@ jobs:
           mkdir -p artifacts
           cp BaseBin/systemhook/systemhook.dylib artifacts/systemhook.dylib
           file artifacts/systemhook.dylib
-          strings artifacts/systemhook.dylib | grep -F "APTTRUST-7C41"
+          strings artifacts/systemhook.dylib | grep -F "TRUSTFLOW-8A10"
 
       - name: Full build TIPA
         if: env.BUILD_MODE == 'full'

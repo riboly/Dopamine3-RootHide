@@ -6,7 +6,9 @@ extern xpc_object_t xpc_create_from_plist(const void *buf, size_t len);
 #include "private.h"
 #include "inline.h"
 
-#define HOOK_DYLIB_PATH "/usr/lib/systemhook.dylib"
+// RootHide exposes systemhook under a per-jailbreak, jbrand-qualified path.
+// roothider_main.c resolves the path of the currently loaded image at startup.
+extern const char *HOOK_DYLIB_PATH;
 
 typedef enum 
 {

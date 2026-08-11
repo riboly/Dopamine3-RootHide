@@ -4,7 +4,7 @@
 #include <limits.h>
 #include <os/log.h>
 
-static const char kAPTTrustBuildMarker[] __attribute__((used)) = "APTTRUST-7C41";
+static const char kTrustFlowBuildMarker[] __attribute__((used)) = "TRUSTFLOW-8A10";
 
 static bool path_has_suffix(const char *path, const char *suffix)
 {

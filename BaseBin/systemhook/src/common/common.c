@@ -256,6 +256,16 @@ static int spawn_exec_hook_common(bool isExec,
 		}
 	} while (0);
 
+	if (strstr(path, "/.jbroot-")) {
+		os_log_error(OS_LOG_DEFAULT,
+			"[TRUSTFLOW-8A10] spawn path=%{public}s hook=%{public}s existing=%{public}s inject=%d config=%u",
+			path,
+			HOOK_DYLIB_PATH ?: "(null)",
+			existingLibraryInserts ?: "(none)",
+			shouldInsertJBEnv,
+			(unsigned int)spawnConfig);
+	}
+
 	uint8_t *attrStruct = (uint8_t *)attr;
 	if (attrStruct) {
 		// If systemhook is being injected and jetsam limits are set, increase them by a factor of jetsamMultiplier
