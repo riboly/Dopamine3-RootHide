@@ -189,59 +189,69 @@ int ensure_randomized_cdhash_for_slice(const char* inputPath, uint64_t offset, v
 			break;
 		}
 
-		//already patched
-		if(*rd2 == jbinfo(jbrand)) {
-			JBLogDebug("macho already patched: %s\n", inputPath);
-			retval = csd_code_directory_calculate_hash(bestCDBlob, cdhashOut);
-			break;
-		}
+		bool alreadyPatched = (*rd2 == jbinfo(jbrand));
+		if (!alreadyPatched) {
+			if(isRemovableBundlePath(inputPath))
+			{
+				if(!hasTrollstoreLiteMarker(inputPath)) {
+					// ignore adhoc signed apps(removable system apps or other stuffs) which is not installed via tslite
+					JBLogDebug("ignoring addhoc signed app: %s\n", inputPath);
+					break;
+				}
+			}
+	
+			*rd2 = jbinfo(jbrand);
 
-		if(isRemovableBundlePath(inputPath))
-		{
-			if(!hasTrollstoreLiteMarker(inputPath)) {
-				// ignore adhoc signed apps(removable system apps or other stuffs) which is not installed via tslite
-				JBLogDebug("ignoring addhoc signed app: %s\n", inputPath);
+			JBLogDebug("randomize cdhash with %016llX: %s\n", *rd2, inputPath);
+		
+			if(memory_stream_write(fat->stream, macho->archDescriptor.offset + firstsectoffset, sizeof(firstsection), &firstsection) != 0) {
+				JBLogError("Error: failed to write macho file: %s\n", inputPath);
 				break;
 			}
-		}
-	
-		*rd2 = jbinfo(jbrand);
-
-		JBLogDebug("randomize cdhash with %016llX: %s\n", *rd2, inputPath);
-		
-		if(memory_stream_write(fat->stream, macho->archDescriptor.offset + firstsectoffset, sizeof(firstsection), &firstsection) != 0) {
-			JBLogError("Error: failed to write macho file: %s\n", inputPath);
-			break;
-		}
-				
-		CS_CodeDirectory codeDir;
-		if(csd_blob_read(bestCDBlob, 0, sizeof(CS_CodeDirectory), &codeDir) != 0) {
-			JBLogError("Error: failed to read code directory: %s\n", inputPath);
-			break;
+		} else {
+			JBLogDebug("macho already patched, validating code directories: %s\n", inputPath);
 		}
 
-		CODE_DIRECTORY_APPLY_BYTE_ORDER(&codeDir, BIG_TO_HOST_APPLIER);
-
-		uint8_t pageHash[codeDir.hashSize];
-		if(!code_directory_calculate_page_hash(&codeDir, macho, 0, pageHash)) {
-			JBLogError("Error: failed to calculate page hash: %s\n", inputPath);
-			break;
-		}
-
+		bool codeDirectoryUpdateFailed = false;
 		for (uint32_t i = 0; i < BIG_TO_HOST(superblob->count); i++) {
 			CS_BlobIndex curIndex = superblob->index[i];
 			BLOB_INDEX_APPLY_BYTE_ORDER(&curIndex, BIG_TO_HOST_APPLIER);
 			//JBLogDebug("decoding %u (type: %x, offset: 0x%x)\n", i, curIndex.type, curIndex.offset);
 
-			if(curIndex.type == bestCDBlob->type)
+			bool isCodeDirectory = curIndex.type == CSSLOT_CODEDIRECTORY
+				|| (curIndex.type >= CSSLOT_ALTERNATE_CODEDIRECTORIES
+					&& curIndex.type < CSSLOT_ALTERNATE_CODEDIRECTORY_LIMIT);
+			if(isCodeDirectory)
 			{
-				if(0 != memory_stream_write(fat->stream, macho->archDescriptor.offset + linkedit.dataoff + curIndex.offset + codeDir.hashOffset, codeDir.hashSize, pageHash)) {
-					JBLogError("Error: failed to write page hash: %s\n", inputPath);
+				CS_DecodedBlob *codeDirectoryBlob = csd_superblob_find_blob(decodedSuperblob, curIndex.type, NULL);
+				CS_CodeDirectory codeDir;
+				if (!codeDirectoryBlob || csd_blob_read(codeDirectoryBlob, 0, sizeof(codeDir), &codeDir) != 0) {
+					JBLogError("Error: failed to read code directory type %x: %s\n", curIndex.type, inputPath);
+					codeDirectoryUpdateFailed = true;
 					break;
 				}
 
-				void* newCDBlob = malloc(codeDir.length);
+				CODE_DIRECTORY_APPLY_BYTE_ORDER(&codeDir, BIG_TO_HOST_APPLIER);
+				uint8_t pageHash[codeDir.hashSize];
+				if(!code_directory_calculate_page_hash(&codeDir, macho, 0, pageHash)) {
+					JBLogError("Error: failed to calculate page hash for code directory type %x: %s\n", curIndex.type, inputPath);
+					codeDirectoryUpdateFailed = true;
+					break;
+				}
 
+				if(0 != memory_stream_write(fat->stream, macho->archDescriptor.offset + linkedit.dataoff + curIndex.offset + codeDir.hashOffset, codeDir.hashSize, pageHash)) {
+					JBLogError("Error: failed to write page hash: %s\n", inputPath);
+					codeDirectoryUpdateFailed = true;
+					break;
+				}
+
+				if (curIndex.type != bestCDBlob->type) continue;
+
+				void* newCDBlob = malloc(codeDir.length);
+				if (!newCDBlob) {
+					codeDirectoryUpdateFailed = true;
+					break;
+				}
 				if(memory_stream_read(fat->stream, macho->archDescriptor.offset + linkedit.dataoff + curIndex.offset, codeDir.length, newCDBlob) == 0)
 				{
 					retval = calc_cdhash(newCDBlob, codeDir.length, csd_code_directory_get_hash_type(bestCDBlob), cdhashOut);
@@ -255,10 +265,9 @@ int ensure_randomized_cdhash_for_slice(const char* inputPath, uint64_t offset, v
 				}
 
 				free(newCDBlob);
-
-				break;
 			}
 		}
+		if (codeDirectoryUpdateFailed) retval = -1;
 
 	} while(0);
 

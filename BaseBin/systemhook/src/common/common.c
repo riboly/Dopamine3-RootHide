@@ -119,12 +119,17 @@ xpc_object_t jbuserconfig_get_value(const char *key)
 	return NULL;
 }
 
+static bool is_apt_helper_path(const char *path)
+{
+	// Keep systemhook in apt-get so it can trust transports spawned later.
+	// Only the short-lived transport itself must be injection-free.
+	return path && strstr(path, "/apt/methods/") != NULL;
+}
+
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
-	// APT transport helpers are short-lived native executables. They must be
-	// trusted, but injecting systemhook can make dyld abort before startup.
-	if (path && strstr(path, "/usr/libexec/apt/methods/") != NULL) {
-		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C32] trust-only APT helper path=%{public}s", path);
+	if (is_apt_helper_path(path)) {
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C35] trust-only APT transport path=%{public}s", path);
 		return kSpawnConfigTrust;
 	}
 

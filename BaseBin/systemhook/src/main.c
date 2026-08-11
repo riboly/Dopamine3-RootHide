@@ -2,17 +2,17 @@
 #include "roothider.h"
 #include <os/log.h>
 
-static const char kAPTTrustBuildMarker[] __attribute__((used)) = "APTTRUST-7C31";
+static const char kAPTTrustBuildMarker[] __attribute__((used)) = "APTTRUST-7C35";
 
 static int trust_executable_recurse_no_arch(const char *path)
 {
 	bool trace = path && strstr(path, "/.jbroot-");
 	if (trace) {
-		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] systemhook trust begin path=%{public}s", path);
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C35] systemhook trust begin path=%{public}s", path);
 	}
 	int result = jbclient_trust_executable_recurse(path, NULL);
 	if (trace) {
-		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C31] systemhook trust end result=%d path=%{public}s", result, path);
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C35] systemhook trust end result=%d path=%{public}s", result, path);
 	}
 	return result;
 }
