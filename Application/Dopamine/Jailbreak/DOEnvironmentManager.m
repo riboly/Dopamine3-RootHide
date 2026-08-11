@@ -233,19 +233,22 @@ int reboot3(uint64_t flags, ...);
 - (BOOL)isJailbroken
 {
 /************** roothide specific ***********/
+    if (_isJailbroken)
+        return YES;
+
     if(!jbclient_roothide_jailbroken())
         return NO;
 /************** roothide specific ********/
 
-    
-    static BOOL jailbroken = NO;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        uint32_t csFlags = 0;
-        csops(getpid(), CS_OPS_STATUS, &csFlags, sizeof(csFlags));
-        jailbroken = csFlags & CS_PLATFORM_BINARY;
-    });
-    return jailbroken;
+    uint32_t csFlags = 0;
+    csops(getpid(), CS_OPS_STATUS, &csFlags, sizeof(csFlags));
+    _isJailbroken = (csFlags & CS_PLATFORM_BINARY) != 0;
+    return _isJailbroken;
+}
+
+- (void)setJailbroken:(BOOL)jailbroken
+{
+    _isJailbroken = jailbroken;
 }
 
 - (BOOL)isJailbrokenWithOtherJailbreak
