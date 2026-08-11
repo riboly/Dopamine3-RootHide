@@ -27,4 +27,330 @@ index 3a08f8f..463ac05 100644
  
  uint32_t generate_movk(uint8_t x, uint16_t val, uint16_t lsl);
  uint32_t generate_br(uint8_t x);
-
+diff --git a/main.m b/main.m
+index 6db6b75..e582fc7 100644
+--- a/main.m
++++ b/main.m
+@@ -38,7 +38,7 @@
+ }
+ 
+ extern int posix_spawnattr_set_ptrauth_task_port_np(posix_spawnattr_t * __restrict attr, mach_port_t port);
+-void spawnPacChild(int argc, char *argv[])
++int spawnPacChild(int argc, char *argv[])
+ {
+ 	char** argsToPass = malloc(sizeof(char*) * (argc + 2));
+ 	for(int i = 0; i < argc; i++)
+@@ -54,7 +54,7 @@ void spawnPacChild(int argc, char *argv[])
+ 	kr = task_for_pid(mach_task_self(), targetPid, &task);
+ 	if(kr != KERN_SUCCESS) {
+ 		printf("[spawnPacChild] Failed to obtain task port.\n");
+-		return;
++		return 1;
+ 	}
+ 	printf("[spawnPacChild] Got task port %d for pid %d\n", task, targetPid);
+ 
+@@ -78,7 +78,7 @@ void spawnPacChild(int argc, char *argv[])
+ 	if(rc != KERN_SUCCESS)
+ 	{
+ 		printf("[spawnPacChild] posix_spawn failed: %d (%s)\n", rc, mach_error_string(rc));
+-		return;
++		return 1;
+ 	}
+ 
+ 	do
+@@ -88,7 +88,8 @@ void spawnPacChild(int argc, char *argv[])
+ 		}
+ 	} while (!WIFEXITED(status) && !WIFSIGNALED(status));
+ 
+-	return;
++	if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
++	return WEXITSTATUS(status);
+ }
+ 
+ int main(int argc, char *argv[], char *envp[]) {
+@@ -110,8 +111,7 @@ int main(int argc, char *argv[], char *envp[]) {
+ 		}
+ 		if (!pacArg || (strcmp("pac", pacArg) != 0))
+ 		{
+-			spawnPacChild(argc, argv);
+-			return 0;
++			return spawnPacChild(argc, argv);
+ 		}
+ #endif
+ 
+@@ -149,10 +149,15 @@ int main(int argc, char *argv[], char *envp[]) {
+ 		uint32_t count = TASK_DYLD_INFO_COUNT;
+ 		task_info(procTask, TASK_DYLD_INFO, (task_info_t)&dyldInfo, &count);
+ 
+-		injectDylibViaRop(procTask, targetPid, dylibPath, dyldInfo.all_image_info_addr);
++		kret = injectDylibViaRop(procTask, targetPid, dylibPath, dyldInfo.all_image_info_addr);
+ 
+ 		mach_port_deallocate(mach_task_self(), procTask);
+-		
++		free(dylibPath);
++
++		if (kret != KERN_SUCCESS) {
++			printf("ERROR: dylib injection failed with error code %d (%s)\n", kret, mach_error_string(kret));
++			return 1;
++		}
+ 		return 0;
+ 	}
+ }
+diff --git a/rop_inject.h b/rop_inject.h
+index eb9294f..97cbb1d 100644
+--- a/rop_inject.h
++++ b/rop_inject.h
+@@ -1 +1 @@
+-extern void injectDylibViaRop(task_t task, pid_t pid, const char* dylibPath, vm_address_t allImageInfoAddr);
+\ No newline at end of file
++extern kern_return_t injectDylibViaRop(task_t task, pid_t pid, const char* dylibPath, vm_address_t allImageInfoAddr);
+diff --git a/rop_inject.m b/rop_inject.m
+index 77acb84..f125a72 100644
+--- a/rop_inject.m
++++ b/rop_inject.m
+@@ -293,12 +293,22 @@ kern_return_t arbCall(task_t task, thread_act_t targetThread, uint64_t* retOut,
+ 	thread_act_array_t cachedThreads;
+ 	mach_msg_type_number_t cachedThreadCount;
+ 	kr = task_threads(task, &cachedThreads, &cachedThreadCount);
+-	if (kr != KERN_SUCCESS) return kr;
++	if (kr != KERN_SUCCESS) {
++		free(origThreadFullState);
++		vm_deallocate(task, remoteStack, STACK_SIZE);
++		thread_resume(targetThread);
++		return kr;
++	}
+ 
+ 	suspend_threads_except_for(cachedThreads, cachedThreadCount, targetThread);
+ 
+ 	// perform arbitary call
+ 	thread_resume(targetThread);
++	// Constructors and runtime availability checks can need work from another
++	// target-process thread. Keeping all launchd threads suspended here can
++	// deadlock dlopen until the system watchdog panics.
++	resume_threads_except_for(cachedThreads, cachedThreadCount, targetThread);
++	vm_deallocate(mach_task_self(), (vm_offset_t)cachedThreads, sizeof(thread_act_array_t) * cachedThreadCount);
+ 	printf("[arbCall] Started thread, waiting for it to finish...\n");
+ 
+ 	// wait for arbitary call to finish (or not)
+@@ -310,6 +320,11 @@ kern_return_t arbCall(task_t task, thread_act_t targetThread, uint64_t* retOut,
+ 		{
+ 			free(origThreadFullState);
+ 			printf("[arbCall] ERROR: failed to wait for thread to finish: %s\n", mach_error_string(kr));
++			if (kr == KERN_OPERATION_TIMED_OUT) {
++				printf("[arbCall] Remote call still active; preserving its stack and thread state\n");
++				return kr;
++			}
++			vm_deallocate(task, remoteStack, STACK_SIZE);
+ 			return kr;
+ 		}
+ 
+@@ -325,10 +340,6 @@ kern_return_t arbCall(task_t task, thread_act_t targetThread, uint64_t* retOut,
+ 		printf("[arbCall] pthread successfully did not return with code %d (%s)\n", kr, mach_error_string(kr));
+ 	}
+ 
+-	resume_threads_except_for(cachedThreads, cachedThreadCount, targetThread);
+-
+-	vm_deallocate(mach_task_self(), (vm_offset_t)cachedThreads, sizeof(thread_act_array_t) * cachedThreadCount);
+-
+ 	// release fake stack as it's no longer needed
+ 	vm_deallocate(task, remoteStack, STACK_SIZE);
+ 
+@@ -364,33 +375,37 @@ void prepareForMagic(task_t task, vm_address_t allImageInfoAddr)
+ 	printf("[prepareForMagic] done, ropLoop: 0x%llX\n", ropLoop);
+ }
+ 
+-bool sandboxFixup(task_t task, thread_act_t pthread, pid_t pid, const char* dylibPath, vm_address_t allImageInfoAddr)
++kern_return_t sandboxFixup(task_t task, thread_act_t pthread, pid_t pid, const char* dylibPath, vm_address_t allImageInfoAddr)
+ {
+ 	int readExtensionNeeded = sandbox_check(pid, "file-read-data", SANDBOX_FILTER_PATH | SANDBOX_CHECK_NO_REPORT, dylibPath);
+ 	int executableExtensionNeeded = sandbox_check(pid, "file-map-executable", SANDBOX_FILTER_PATH | SANDBOX_CHECK_NO_REPORT, dylibPath);
+ 
+-	int retval = 0;
+ 	vm_address_t libSystemSandboxAddr = 0;
+ 	uint64_t sandbox_extension_consumeAddr = 0;
+ 	if (readExtensionNeeded || executableExtensionNeeded) {
+ 		libSystemSandboxAddr = getRemoteImageAddress(task, allImageInfoAddr, "/usr/lib/system/libsystem_sandbox.dylib");
+ 		sandbox_extension_consumeAddr = remoteDlSym(task, libSystemSandboxAddr, "_sandbox_extension_consume");
+ 		printf("[sandboxFixup] applying sandbox extension(s)! sandbox_extension_consume: 0x%llX\n", sandbox_extension_consumeAddr);
++		if (!sandbox_extension_consumeAddr) return KERN_FAILURE;
+ 	}
+ 
+ 	if (readExtensionNeeded) {
+ 		char* extString = sandbox_extension_issue_file(APP_SANDBOX_READ, dylibPath, 0);
++		if (!extString) return KERN_FAILURE;
+ 		size_t remoteExtStringSize = 0;
+ 		vm_address_t remoteExtString = writeStringToTask(task, (const char*)extString, &remoteExtStringSize);
++		free(extString);
+ 		if(remoteExtString)
+ 		{
+ 			int64_t readExtensionRet = 0;
+-			arbCall(task, pthread, (uint64_t*)&readExtensionRet, true, sandbox_extension_consumeAddr, 1, remoteExtString);
+-			vm_deallocate(task, remoteExtString, remoteExtStringSize);
++			kern_return_t kr = arbCall(task, pthread, (uint64_t*)&readExtensionRet, true, sandbox_extension_consumeAddr, 1, remoteExtString);
++			if (kr != KERN_OPERATION_TIMED_OUT) vm_deallocate(task, remoteExtString, remoteExtStringSize);
++			if (kr != KERN_SUCCESS) return kr;
+ 
+ 			printf("[sandboxFixup] sandbox_extension_consume returned %lld for read extension\n", (int64_t)readExtensionRet);
+-			retval |= (readExtensionRet <= 0);
++			if (readExtensionRet <= 0) return KERN_FAILURE;
+ 		}
++		else return KERN_FAILURE;
+ 	}
+ 	else {
+ 		printf("[sandboxFixup] read extension not needed, skipping...\n");
+@@ -398,34 +413,43 @@ bool sandboxFixup(task_t task, thread_act_t pthread, pid_t pid, const char* dyli
+ 
+ 	if (executableExtensionNeeded) {
+ 		char* extString = sandbox_extension_issue_file("com.apple.sandbox.executable", dylibPath, 0);
++		if (!extString) return KERN_FAILURE;
+ 		size_t remoteExtStringSize = 0;
+ 		vm_address_t remoteExtString = writeStringToTask(task, (const char*)extString, &remoteExtStringSize);
++		free(extString);
+ 		if(remoteExtString)
+ 		{
+ 			int64_t executableExtensionRet = 0;
+-			arbCall(task, pthread, (uint64_t*)&executableExtensionRet, true, sandbox_extension_consumeAddr, 1, remoteExtString);
+-			vm_deallocate(task, remoteExtString, remoteExtStringSize);
++			kern_return_t kr = arbCall(task, pthread, (uint64_t*)&executableExtensionRet, true, sandbox_extension_consumeAddr, 1, remoteExtString);
++			if (kr != KERN_OPERATION_TIMED_OUT) vm_deallocate(task, remoteExtString, remoteExtStringSize);
++			if (kr != KERN_SUCCESS) return kr;
+ 
+ 			printf("[sandboxFixup] sandbox_extension_consume returned %lld for executable extension\n", (int64_t)executableExtensionRet);
+-			retval |= (executableExtensionRet <= 0);
++			if (executableExtensionRet <= 0) return KERN_FAILURE;
+ 		}
++		else return KERN_FAILURE;
+ 	}
+ 	else {
+ 		printf("[sandboxFixup] executable extension not needed, skipping...\n");
+ 	}
+ 
+-	return retval == 0;
++	return KERN_SUCCESS;
+ }
+ 
+-void injectDylibViaRop(task_t task, pid_t pid, const char* dylibPath, vm_address_t allImageInfoAddr)
++kern_return_t injectDylibViaRop(task_t task, pid_t pid, const char* dylibPath, vm_address_t allImageInfoAddr)
+ {
+ 	prepareForMagic(task, allImageInfoAddr);
+ 
+ 	thread_act_t pthread = 0;
+ 	kern_return_t kr = createRemotePthread(task, allImageInfoAddr, &pthread);
+-	if(kr != KERN_SUCCESS) return;
++	if(kr != KERN_SUCCESS) return kr;
+ 
+-	sandboxFixup(task, pthread, pid, dylibPath, allImageInfoAddr);
++	kr = sandboxFixup(task, pthread, pid, dylibPath, allImageInfoAddr);
++	if (kr != KERN_SUCCESS) {
++		printf("[injectDylibViaRop] ERROR: sandbox fixup failed: %s\n", mach_error_string(kr));
++		if (kr != KERN_OPERATION_TIMED_OUT) thread_terminate(pthread);
++		return kr;
++	}
+ 
+ 	printf("[injectDylibViaRop] Preparation done, now injecting!\n");
+ 
+@@ -435,27 +459,40 @@ void injectDylibViaRop(task_t task, pid_t pid, const char* dylibPath, vm_address
+ 	uint64_t dlerrorAddr = remoteDlSym(task, libDyldAddr, "_dlerror");
+ 
+ 	printf("[injectDylibViaRop] dlopen: 0x%llX, dlerror: 0x%llX\n", (unsigned long long)dlopenAddr, (unsigned long long)dlerrorAddr);
++	if (!dlopenAddr || !dlerrorAddr) {
++		thread_terminate(pthread);
++		return KERN_FAILURE;
++	}
+ 
+ 	// CALL DLOPEN
+ 	size_t remoteDylibPathSize = 0;
+ 	vm_address_t remoteDylibPath = writeStringToTask(task, (const char*)dylibPath, &remoteDylibPathSize);
+ 	if(remoteDylibPath)
+ 	{
+-		void* dlopenRet;
+-		arbCall(task, pthread, (uint64_t*)&dlopenRet, true, dlopenAddr, 2, remoteDylibPath, RTLD_NOW);
+-		vm_deallocate(task, remoteDylibPath, remoteDylibPathSize);
++		void* dlopenRet = NULL;
++		kr = arbCall(task, pthread, (uint64_t*)&dlopenRet, true, dlopenAddr, 2, remoteDylibPath, RTLD_NOW);
++		if (kr != KERN_OPERATION_TIMED_OUT) vm_deallocate(task, remoteDylibPath, remoteDylibPathSize);
++		if (kr != KERN_SUCCESS) return kr;
+ 
+ 		if (dlopenRet) {
+ 			printf("[injectDylibViaRop] dlopen succeeded, library handle: %p\n", dlopenRet);
+ 		}
+ 		else {
+ 			uint64_t remoteErrorString = 0;
+-			arbCall(task, pthread, (uint64_t*)&remoteErrorString, true, dlerrorAddr, 0);
++			kr = arbCall(task, pthread, (uint64_t*)&remoteErrorString, true, dlerrorAddr, 0);
++			if (kr != KERN_SUCCESS) return kr;
+ 			char *errorString = task_copy_string(task, remoteErrorString);
+ 			printf("[injectDylibViaRop] dlopen failed, error:\n%s\n", errorString);
+ 			free(errorString);
++			thread_terminate(pthread);
++			return KERN_FAILURE;
+ 		}
+ 	}
++	else {
++		thread_terminate(pthread);
++		return KERN_FAILURE;
++	}
+ 
+ 	thread_terminate(pthread);
+-}
+\ No newline at end of file
++	return KERN_SUCCESS;
++}
+diff --git a/thread_utils.m b/thread_utils.m
+index 5339972..58784c6 100644
+--- a/thread_utils.m
++++ b/thread_utils.m
+@@ -3,6 +3,7 @@
+ #import <stdio.h>
+ #import <unistd.h>
+ #import <stdlib.h>
++#import <time.h>
+ 
+ #import <mach-o/getsect.h>
+ #import <mach-o/dyld.h>
+@@ -96,12 +97,14 @@ bool thread_restore_state_arm64(thread_act_t thread, struct arm64_thread_full_st
+ 
+ kern_return_t wait_for_thread(thread_act_t thread, uint64_t pcToWait, struct arm_unified_thread_state* stateOut)
+ {
+-	mach_msg_type_number_t stateToObserveCount = ARM_THREAD_STATE64_COUNT;
+ 	struct arm_unified_thread_state stateToObserve;
++	struct timespec startTime;
++	clock_gettime(CLOCK_MONOTONIC, &startTime);
+ 
+ 	int errCount = 0;
+ 	while(1)
+ 	{
++		mach_msg_type_number_t stateToObserveCount = ARM_THREAD_STATE64_COUNT;
+ 		kern_return_t kr = thread_get_state(thread, ARM_THREAD_STATE64, (thread_state_t)&stateToObserve.ts_64, &stateToObserveCount);
+ 		if(kr != KERN_SUCCESS)
+ 		{
+@@ -122,6 +125,22 @@ kern_return_t wait_for_thread(thread_act_t thread, uint64_t pcToWait, struct arm
+ 		if(pc == pcToWait) {
+ 			break;
+ 		}
++
++		struct timespec now;
++		clock_gettime(CLOCK_MONOTONIC, &now);
++		int64_t elapsedNs = ((int64_t)(now.tv_sec - startTime.tv_sec) * NSEC_PER_SEC) + now.tv_nsec - startTime.tv_nsec;
++		if (elapsedNs >= (15 * NSEC_PER_SEC)) {
++			printf("[wait_for_thread] ERROR: timed out after 15 seconds; expected pc=0x%llX, pc=0x%llX, lr=0x%llX, sp=0x%llX\n",
++				(unsigned long long)pcToWait,
++				(unsigned long long)pc,
++				(unsigned long long)__darwin_arm_thread_state64_get_lr(stateToObserve.ts_64),
++				(unsigned long long)__darwin_arm_thread_state64_get_sp(stateToObserve.ts_64));
++			printThreadInfo(thread);
++			if (stateOut) *stateOut = stateToObserve;
++			return KERN_OPERATION_TIMED_OUT;
++		}
++
++		usleep(1000);
+ 	}
+ 
+ 	if(stateOut)
+@@ -212,4 +231,4 @@ void printThreadInfo(thread_act_t thread)
+ 
+ 	printf("system_time: %d.%d\n", basicInfo.system_time.seconds, basicInfo.system_time.microseconds);
+ 	printf("user_time: %d.%d\n", basicInfo.user_time.seconds, basicInfo.user_time.microseconds);
+-}
+\ No newline at end of file
++}
