@@ -77,7 +77,7 @@
     static dispatch_once_t onceToken;
     static NSArray *releases;
     dispatch_once(&onceToken, ^{
-        NSURL *url = [NSURL URLWithString:@"https://api.github.com/repos/roothide/Dopamine2-roothide/releases"];
+        NSURL *url = [NSURL URLWithString:@"https://api.github.com/repos/P013onEr/RootHide/releases"];
         NSData *data = [NSData dataWithContentsOfURL:url];
         if (data) {
             NSError *error;
@@ -133,7 +133,7 @@
 
 - (NSString*)getLaunchedReleaseTag
 {
-    return [[[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] componentsSeparatedByString:@"."] lastObject];
+    return [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
 }
 
 - (NSArray*)availablePackageManagers
