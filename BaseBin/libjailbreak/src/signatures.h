@@ -4,6 +4,7 @@
 #include <choma/CodeDirectory.h>
 
 typedef enum {
+	SIGNATURE_SOURCE_ALLOCATION,
 	SIGNATURE_SOURCE_FILE,
 	SIGNATURE_SOURCE_PROC,
 } signature_source_t;

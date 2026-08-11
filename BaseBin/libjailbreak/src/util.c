@@ -601,6 +601,46 @@ void proc_remove_msg_filter(uint64_t proc)
 	}
 }
 
+uint64_t proc_get_vnode_for_fd(uint64_t proc, int fd)
+{
+	uint64_t ofiles = kread_ptr(proc + koffsetof(proc, fd) + koffsetof(filedesc, ofiles_start));
+	uint64_t fileproc = kread_ptr(ofiles + (fd * sizeof(void *)));
+	uint64_t fileglob = kread_ptr(fileproc + koffsetof(fileproc, glob));
+	return kread_ptr(fileglob + koffsetof(fileglob, data));
+}
+
+int fd_attach_signature(int fd, fsignatures_t *signature)
+{
+	off_t origPos = lseek(fd, 0, SEEK_CUR);
+	struct mach_header header;
+	lseek(fd, signature->fs_file_start, SEEK_SET);
+	if (read(fd, &header, sizeof(header)) != sizeof(header)) return -2;
+
+	lseek(fd, 0, SEEK_SET);
+	int r = fcntl(fd, F_ADDSIGS, signature);
+	lseek(fd, origPos, SEEK_SET);
+	if (r != 0) return r;
+
+	uint64_t vnode = proc_get_vnode_for_fd(proc_self(), fd);
+	uint64_t ubc_info = kread_ptr(vnode + koffsetof(vnode, un));
+	uint64_t cs_blob = kread_ptr(ubc_info + koffsetof(ubc_info, cs_blobs));
+	uint64_t target_cs_blob = 0;
+	if (cs_blob) {
+		do {
+			uint64_t base_offset = kread64(cs_blob + koffsetof(cs_blob, base_offset));
+			if (signature->fs_file_start == base_offset) {
+				target_cs_blob = cs_blob;
+				break;
+			}
+		} while ((cs_blob = kread_ptr(cs_blob + koffsetof(cs_blob, next))) != 0);
+	}
+	if (!target_cs_blob) return -4;
+
+	kwrite32(target_cs_blob + koffsetof(cs_blob, cpu_type), header.cputype);
+	kwrite32(target_cs_blob + koffsetof(cs_blob, cpu_subtype), header.cpusubtype);
+	return 0;
+}
+
 int cmd_wait_for_exit(pid_t pid)
 {
 	int status = 0;

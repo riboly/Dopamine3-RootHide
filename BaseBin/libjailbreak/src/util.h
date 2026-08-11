@@ -56,6 +56,7 @@ void convert_data_to_hex_string(const void *data, size_t size, char *outBuf);
 int convert_hex_string_to_data(const char *string, void *outBuf);
 
 int cmd_wait_for_exit(pid_t pid);
+int fd_attach_signature(int fd, fsignatures_t *signature);
 int exec_cmd(const char *binary, ...);
 int exec_cmd_nowait(pid_t *pidOut, const char *binary, ...);
 int exec_cmd_suspended(pid_t *pidOut, const char *binary, ...);
