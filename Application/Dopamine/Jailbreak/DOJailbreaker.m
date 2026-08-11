@@ -68,11 +68,18 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
 {
     NSString *kernelPath = [[DOEnvironmentManager sharedManager] accessibleKernelPath];
     if (!kernelPath) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedToFindKernel userInfo:@{NSLocalizedDescriptionKey:@"Failed to find kernelcache. Ensure your device is properly connected to the internet. If it still does not work, try installing Dopamine via TrollStore instead."}];
-    NSLog(@"Kernel at %s", kernelPath.UTF8String);
+    NSLog(@"Kernel at %@", kernelPath);
+
+    NSString *sptmPath = [[DOEnvironmentManager sharedManager] accessibleSPTMPath];
+    NSString *txmPath = [[DOEnvironmentManager sharedManager] accessibleTXMPath];
+    if (sptmPath) NSLog(@"SPTM at %@", sptmPath);
+    if (txmPath) NSLog(@"TXM at %@", txmPath);
     
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Patchfinding") debug:NO];
     
-    int r = xpf_start_with_kernel_path(kernelPath.fileSystemRepresentation);
+    int r = xpf_start_with_kernel_path(kernelPath.fileSystemRepresentation,
+                                       sptmPath ? sptmPath.fileSystemRepresentation : NULL,
+                                       txmPath ? txmPath.fileSystemRepresentation : NULL);
     if (r == 0) {
         char *sets[99] = {
             "translation",
@@ -81,7 +88,6 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
             "physmap",
             "struct",
             "physrw",
-            "perfkrw",
 			"IOSurface",
             NULL,
             NULL,
@@ -102,6 +108,9 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
         if (xpf_set_is_supported("arm64kcall")) {
             sets[idx++] = "arm64kcall"; 
         }
+        if (xpf_set_is_supported("perfkrw")) {
+            sets[idx++] = "perfkrw";
+        }
 
 
 /********************** roothide *************************/
@@ -118,6 +127,12 @@ sets[idx] = NULL;
         _systemInfoXdict = xpf_construct_offset_dictionary((const char **)sets);
         if (_systemInfoXdict) {
             xpc_dictionary_set_uint64(_systemInfoXdict, "kernelConstant.staticBase", gXPF.kernelBase);
+            if (gXPF.sptm) {
+                xpc_dictionary_set_uint64(_systemInfoXdict, "kernelConstant.staticSptmBase", gXPF.sptmBase);
+            }
+            if (gXPF.txm) {
+                xpc_dictionary_set_uint64(_systemInfoXdict, "kernelConstant.staticTxmBase", gXPF.txmBase);
+            }
             printf("System Info:\n");
             xpc_dictionary_apply(_systemInfoXdict, ^bool(const char *key, xpc_object_t value) {
                 if (xpc_get_type(value) == XPC_TYPE_UINT64) {
@@ -139,6 +154,10 @@ sets[idx] = NULL;
     
     jbinfo_initialize_dynamic_offsets(_systemInfoXdict);
     jbinfo_initialize_hardcoded_offsets();
+
+    if ([NSBundle mainBundle].bundleIdentifier) {
+        gSystemInfo.jailbreakInfo.appIdentifier = strdup([NSBundle mainBundle].bundleIdentifier.UTF8String);
+    }
     _systemInfoXdict = jbinfo_get_serialized();
     
     if (_systemInfoXdict) {
@@ -308,8 +327,14 @@ sets[idx] = NULL;
 - (NSError *)ensureDevModeEnabled
 {
     if (@available(iOS 16.0, *)) {
-        uint64_t developer_mode_storage = kread64(ksymbol(developer_mode_enabled));
-        kwrite8(developer_mode_storage, 1);
+        uint64_t developerModeStorage = 0;
+        if (ksymbol(developer_mode_enabled)) {
+            developerModeStorage = kread64(ksymbol(developer_mode_enabled));
+        }
+        else if (ksymbol_txm(txm_developer_mode_storage)) {
+            developerModeStorage = ksymbol_txm(txm_developer_mode_storage);
+        }
+        if (developerModeStorage) kwrite8(developerModeStorage, 1);
     }
     return nil;
 }

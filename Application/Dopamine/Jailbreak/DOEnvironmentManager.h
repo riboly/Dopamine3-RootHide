@@ -25,16 +25,23 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSString *)appVersionDisplayString;
 - (NSString *)nightlyHash;
 
+- (NSString *)privatePrebootPath;
+- (NSString *)activePrebootPath;
+
 - (BOOL)isInstalledThroughTrollStore;
 - (BOOL)isJailbroken;
 - (BOOL)isJailbrokenWithOtherJailbreak;
 - (BOOL)isBootstrapped;
 - (NSString *)jailbrokenVersion;
+- (NSString *)systemVersion;
 
 - (BOOL)isSupported;
 - (BOOL)isArm64e;
+- (BOOL)isSPTM;
 - (NSString *)versionSupportString;
 - (NSString *)accessibleKernelPath;
+- (NSString *)accessibleSPTMPath;
+- (NSString *)accessibleTXMPath;
 - (void)locateJailbreakRoot;
 - (NSError *)ensureJailbreakRootExists;
 

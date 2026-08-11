@@ -31,6 +31,7 @@
 #import <LocalAuthentication/LocalAuthentication.h>
 
 int reboot3(uint64_t flags, ...);
+CFPropertyListRef MGCopyAnswer(CFStringRef);
 
 @implementation DOEnvironmentManager
 
@@ -98,9 +99,14 @@ int reboot3(uint64_t flags, ...);
     return _bootManifestHash;
 }
 
+- (NSString *)privatePrebootPath
+{
+    return @"/private/preboot";
+}
+
 - (NSString *)activePrebootPath
 {
-    return [@"/private/preboot" stringByAppendingPathComponent:[self bootManifestHash].hexString];
+    return [[self privatePrebootPath] stringByAppendingPathComponent:[self bootManifestHash].hexString];
 }
 
 /*
@@ -209,14 +215,40 @@ int reboot3(uint64_t flags, ...);
     return (cpusubtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E;
 }
 
+- (BOOL)isSPTM
+{
+    if (@available(iOS 17.0, *)) {
+        io_registry_entry_t memoryMap = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/chosen/memory-map");
+        if (memoryMap == IO_OBJECT_NULL) return NO;
+
+        CFArrayRef keys = (CFArrayRef)IORegistryEntryCreateCFProperty(memoryMap, CFSTR(kIORegistryEntryPropertyKeysKey), kCFAllocatorDefault, 0);
+        IOObjectRelease(memoryMap);
+        if (!keys) return NO;
+
+        CFRange range = CFRangeMake(0, CFArrayGetCount(keys));
+        BOOL isSPTM = CFArrayContainsValue(keys, range, CFSTR("SPTM")) && CFArrayContainsValue(keys, range, CFSTR("TXM"));
+        CFRelease(keys);
+        return isSPTM;
+    }
+    return NO;
+}
+
 - (NSString *)versionSupportString
 {
+    cpu_subtype_t cpuFamily = 0;
+    size_t cpuFamilySize = sizeof(cpuFamily);
+    sysctlbyname("hw.cpufamily", &cpuFamily, &cpuFamilySize, NULL, 0);
+
     if ([self isArm64e]) {
-        return @"iOS 15.0 - 16.6.1 (arm64e)";
+        if (cpuFamily == CPUFAMILY_ARM_VORTEX_TEMPEST || cpuFamily == CPUFAMILY_ARM_LIGHTNING_THUNDER) {
+            return @"iOS 15.0 - 18.7.1, 26.0 - 26.0.1 (A12/A13, PPL)";
+        }
+        if (![self isSPTM]) {
+            return @"iOS 15.0 - 17.3.1 (PPL)";
+        }
+        return @"iOS 17.0 - 17.3.1 (SPTM)";
     }
-    else {
-        return @"iOS 15.0 - 15.8.6 / 16.0 - 16.6.1 (arm64)";
-    }
+    return @"iOS 15.0 - 18.7.1 (arm64)";
 }
 
 - (BOOL)isInstalledThroughTrollStore
@@ -272,6 +304,11 @@ int reboot3(uint64_t flags, ...);
         }];
     }];
     return [[version componentsSeparatedByString:@"."] lastObject];
+}
+
+- (NSString *)systemVersion
+{
+    return (__bridge NSString *)MGCopyAnswer(CFSTR("ProductVersion"));
 }
 
 - (BOOL)isBootstrapped
@@ -601,7 +638,7 @@ int reboot3(uint64_t flags, ...);
 
 - (NSString *)accessibleKernelPath
 {
-    if ([self isInstalledThroughTrollStore]) {
+    if ([self isInstalledThroughTrollStore] || getuid() == 0) {
         NSString *kernelcachePath = [[self activePrebootPath] stringByAppendingPathComponent:@"System/Library/Caches/com.apple.kernelcaches/kernelcache"];
         if ([[NSFileManager defaultManager] fileExistsAtPath:kernelcachePath]) {
             return kernelcachePath;
@@ -621,6 +658,42 @@ int reboot3(uint64_t flags, ...);
         }
         return kernelcachePath;
     }
+}
+
+- (NSString *)accessibleSPTMPath
+{
+    NSArray<NSString *> *localNames = @[@"sptm.img4", @"sptm.im4p"];
+    for (NSString *name in localNames) {
+        NSString *appPath = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:name];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:appPath]) return appPath;
+
+        NSString *documentsPath = [NSHomeDirectory() stringByAppendingPathComponent:[@"Documents" stringByAppendingPathComponent:name]];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:documentsPath]) return documentsPath;
+    }
+
+    if ([self isInstalledThroughTrollStore] || getuid() == 0) {
+        NSString *path = [[self activePrebootPath] stringByAppendingPathComponent:@"usr/standalone/firmware/FUD/Ap,SecurePageTableMonitor.img4"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) return path;
+    }
+    return nil;
+}
+
+- (NSString *)accessibleTXMPath
+{
+    NSArray<NSString *> *localNames = @[@"txm.img4", @"txm.im4p"];
+    for (NSString *name in localNames) {
+        NSString *appPath = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:name];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:appPath]) return appPath;
+
+        NSString *documentsPath = [NSHomeDirectory() stringByAppendingPathComponent:[@"Documents" stringByAppendingPathComponent:name]];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:documentsPath]) return documentsPath;
+    }
+
+    if ([self isInstalledThroughTrollStore] || getuid() == 0) {
+        NSString *path = [[self activePrebootPath] stringByAppendingPathComponent:@"usr/standalone/firmware/FUD/Ap,TrustedExecutionMonitor.img4"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) return path;
+    }
+    return nil;
 }
 
 - (BOOL)isPACBypassRequired
