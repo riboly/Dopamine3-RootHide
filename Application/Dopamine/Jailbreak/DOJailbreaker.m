@@ -418,6 +418,12 @@ void *boomerang_server(struct boomerang_info *info)
         }
     } while (!WIFEXITED(status) && !WIFSIGNALED(status));
 
+    // On iOS 18+, a failed stash leaves launchd with a null registeredPorts[2].
+    // Injecting anyway makes launchdhook panic the system with recover error -2.
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"jbctl launchd_stash_port failed (status=%d)", status]}];
+    }
+
     // Inject launchdhook.dylib into launchd via opainject
     printf("[launchdhook-build] launchd-availability-v3\n");
     int r = exec_cmd(JBROOT_PATH("/basebin/opainject"), "1", JBROOT_PATH("/basebin/launchdhook.dylib"), NULL);

@@ -5,6 +5,7 @@
 #include <spawn.h>
 
 #include <libjailbreak/libjailbreak.h>
+#include <libjailbreak/stock_fixes.h>
 #include <libjailbreak/roothider.h>
 
 extern char **environ;

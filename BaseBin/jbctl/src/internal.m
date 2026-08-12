@@ -1,6 +1,7 @@
 #import "internal.h"
 #import <Foundation/Foundation.h>
 #import <libjailbreak/libjailbreak.h>
+#import <libjailbreak/stock_fixes.h>
 #import <sys/mount.h>
 #import <errno.h>
 
