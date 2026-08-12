@@ -447,6 +447,19 @@ void *crashreporter_listen(void *arg)
 	}
 }
 
+// iOS 17+ rejects EXCEPTION_DEFAULT on task_set_exception_ports for processes
+// without com.apple.private.set-exception-port (launchd included). The kernel
+// raises EXC_GUARD / kGUARD_EXC_EXCEPTION_BEHAVIOR_ENFORCE (OS_REASON_GUARD
+// namespace 23, subcode 0x20000006), which kills launchd and panics the system.
+// Stock Dopamine disables this path on iOS 17+; RootHide must match that.
+static bool crashreporter_exception_ports_allowed(void)
+{
+	if (@available(iOS 17.0, *)) {
+		return false;
+	}
+	return true;
+}
+
 int gCrashReporterStateKey = 0;
 int crashreporter_pause(void)
 {
@@ -454,7 +467,9 @@ int crashreporter_pause(void)
 	@synchronized(@"CrashReporterStateKey")
 	{
 		if (gCrashReporterState == kCrashReporterStateActive) {
-			task_set_exception_ports(mach_task_self_, EXC_MASK_CRASH_RELATED, MACH_PORT_NULL, 0, 0);
+			if (crashreporter_exception_ports_allowed()) {
+				task_set_exception_ports(mach_task_self_, EXC_MASK_CRASH_RELATED, MACH_PORT_NULL, 0, 0);
+			}
 			NSSetUncaughtExceptionHandler(defaultNSExceptionHandler);
 			defaultNSExceptionHandler = nil;
 			gCrashReporterState = kCrashReporterStatePaused;
@@ -472,7 +487,9 @@ void crashreporter_resume(int key)
 		if(key == gCrashReporterStateKey)
 		{
 			if (gCrashReporterState == kCrashReporterStatePaused) {
-				task_set_exception_ports(mach_task_self_, EXC_MASK_CRASH_RELATED, gExceptionPort, EXCEPTION_DEFAULT|MACH_EXCEPTION_CODES, ARM_THREAD_STATE64);
+				if (crashreporter_exception_ports_allowed()) {
+					task_set_exception_ports(mach_task_self_, EXC_MASK_CRASH_RELATED, gExceptionPort, EXCEPTION_DEFAULT|MACH_EXCEPTION_CODES, ARM_THREAD_STATE64);
+				}
 				defaultNSExceptionHandler = NSGetUncaughtExceptionHandler();
 				NSSetUncaughtExceptionHandler(crashreporter_catch_objc);
 				gCrashReporterState = kCrashReporterStateActive;
@@ -586,7 +603,9 @@ void crashreporter_start()
 	uint32_t pathlen = sizeof(pathbuf);
 	_NSGetExecutablePath(pathbuf, &pathlen);
 	gReportName = strdup(basename(pathbuf));
-	
+
+	// Signal capture remains safe on all iOS versions and is the only
+	// reporting path available once exception ports are blocked on 17+.
 	for(int i=0; i<sizeof(sigcatch)/sizeof(sigcatch[0]); i++) {
 		struct sigaction act = {0};
 		act.sa_flags = SA_SIGINFO|SA_RESETHAND;
@@ -595,6 +614,14 @@ void crashreporter_start()
 	}
 
 	if (gCrashReporterState == kCrashReporterStateNotActive) {
+		// Still install ObjC uncaught handler; skip Mach exception ports on iOS 17+.
+		if (!crashreporter_exception_ports_allowed()) {
+			defaultNSExceptionHandler = NSGetUncaughtExceptionHandler();
+			NSSetUncaughtExceptionHandler(crashreporter_catch_objc);
+			gCrashReporterState = kCrashReporterStateActive;
+			return;
+		}
+
 		mach_port_allocate(mach_task_self_, MACH_PORT_RIGHT_RECEIVE, &gExceptionPort);
 		mach_port_insert_right(mach_task_self_, gExceptionPort, gExceptionPort, MACH_MSG_TYPE_MAKE_SEND);
 		pthread_create(&gExceptionThread, NULL, crashreporter_listen, "crashreporter");
