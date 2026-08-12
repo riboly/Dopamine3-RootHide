@@ -15,8 +15,42 @@
 #include "trustcache.h"
 
 #include "roothider.h"
+#include "jbclient_xpc.h"
 
 extern CS_DecodedBlob *csd_superblob_find_best_code_directory(CS_DecodedSuperBlob *decodedSuperblob);
+
+// Register a local trust implementation for processes that already have
+// kernel primitives (Dopamine app). systemhook does not include this file.
+static int jbclient_trust_file_local_impl(int fd)
+{
+	if (!gPrimitives.kreadbuf) return -1;
+
+	cdhash_t *cdhashes = NULL;
+	uint32_t cdhashesCount = 0;
+	file_collect_untrusted_cdhashes(fd, &cdhashes, &cdhashesCount);
+	if (cdhashes && cdhashesCount > 0) {
+		jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
+		free(cdhashes);
+	}
+
+	struct siginfo *sigInfos = NULL;
+	uint32_t sigInfoCount = 0;
+	file_collect_signatures(fd, &sigInfos, &sigInfoCount);
+	int r = trust_signatures(getpid(), fd, sigInfos, sigInfoCount);
+	for (uint32_t i = 0; i < sigInfoCount; i++) {
+		if (sigInfos[i].source == SIGNATURE_SOURCE_ALLOCATION) {
+			free(sigInfos[i].signature.fs_blob_start);
+		}
+	}
+	free(sigInfos);
+	return r;
+}
+
+__attribute__((constructor))
+static void jbclient_register_local_trust_handler(void)
+{
+	jbclient_set_trust_file_local_handler(jbclient_trust_file_local_impl);
+}
 
 bool macho_is_mappable(MachO *macho)
 {

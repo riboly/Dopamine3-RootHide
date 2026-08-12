@@ -1,8 +1,6 @@
 #include "jbclient_xpc.h"
 #include "jbclient_mach.h"
 #include "jbserver.h"
-#include "primitives.h"
-#include "trustcache.h"
 #include <dispatch/dispatch.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
@@ -130,50 +128,20 @@ char *jbclient_get_boot_uuid(void)
 	return (char *)&bootUUID[0];
 }
 
-// Local trust path used when the process already has kernel r/w (Dopamine app
-// mid-jailbreak). Avoids depending on launchd XPC which can fail before
-// systemhook/checkin is fully active, producing "Failed to trust binary".
-//
-// systemhook links this file without signatures/trustcache objects, so keep
-// those dependencies weak and skip local trust when unavailable.
-void file_collect_untrusted_cdhashes(int fd, cdhash_t **cdhashesOut, uint32_t *cdhashCountOut) __attribute__((weak));
-void file_collect_signatures(int fd, struct siginfo **sigInfosOut, uint32_t *sigInfoCountOut) __attribute__((weak));
-int trust_signatures(int pid, int fd, struct siginfo *sigInfos, uint32_t sigInfoCount) __attribute__((weak));
-int jb_trustcache_add_cdhashes(cdhash_t *hashes, uint32_t hashCount) __attribute__((weak));
+// Optional local-trust implementation. Full libjailbreak registers this via
+// jbclient_set_trust_file_local_handler; systemhook leaves it NULL.
+static int (*gTrustFileLocalHandler)(int fd) = NULL;
 
-static int jbclient_trust_file_local(int fd)
+void jbclient_set_trust_file_local_handler(int (*handler)(int fd))
 {
-	if (!gPrimitives.kreadbuf) return -1;
-	if (!file_collect_untrusted_cdhashes || !file_collect_signatures || !trust_signatures || !jb_trustcache_add_cdhashes) {
-		return -1;
-	}
-
-	cdhash_t *cdhashes = NULL;
-	uint32_t cdhashesCount = 0;
-	file_collect_untrusted_cdhashes(fd, &cdhashes, &cdhashesCount);
-	if (cdhashes && cdhashesCount > 0) {
-		jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
-		free(cdhashes);
-	}
-
-	struct siginfo *sigInfos = NULL;
-	uint32_t sigInfoCount = 0;
-	file_collect_signatures(fd, &sigInfos, &sigInfoCount);
-	int r = trust_signatures(getpid(), fd, sigInfos, sigInfoCount);
-	for (uint32_t i = 0; i < sigInfoCount; i++) {
-		if (sigInfos[i].source == SIGNATURE_SOURCE_ALLOCATION) {
-			free(sigInfos[i].signature.fs_blob_start);
-		}
-	}
-	free(sigInfos);
-	return r;
+	gTrustFileLocalHandler = handler;
 }
 
 int jbclient_trust_file(int fd, struct siginfo *siginfo, bool attach)
 {
-	// Prefer local trust first when primitives exist (first jailbreak pass in app).
-	if (!siginfo && gPrimitives.kreadbuf) {
-		int local = jbclient_trust_file_local(fd);
+	// Prefer local trust when available (Dopamine app with kernel r/w).
+	if (!siginfo && gTrustFileLocalHandler) {
+		int local = gTrustFileLocalHandler(fd);
 		if (local == 0) return 0;
 	}
 
@@ -191,9 +159,8 @@ int jbclient_trust_file(int fd, struct siginfo *siginfo, bool attach)
 		if (result == 0) return 0;
 	}
 
-	// XPC failed: try local once more (covers case where kread became available mid-call).
-	if (!siginfo) {
-		int local = jbclient_trust_file_local(fd);
+	if (!siginfo && gTrustFileLocalHandler) {
+		int local = gTrustFileLocalHandler(fd);
 		if (local == 0) return 0;
 	}
 	return -1;
