@@ -118,12 +118,13 @@ void roothide_launchd_postinit(bool firstLoad)
 	if(firstLoad)
 	{
 		HOOK_DYLIB_PATH = "";
-		
-		if (roothide_is_ios16_or_newer())
-		{
-			hideDeveloperMode();
+
+		// Keep AMFI developer mode ON. Old hideDeveloperMode swapped sysctl OIDs
+		// and broke Settings/Sileo launch ("Developer Mode required").
+		if (roothide_is_ios16_or_newer()) {
+			ensureDeveloperModeEnabled();
 		}
-		
+
 #ifdef __arm64e__
 		if (!roothide_is_ios16_or_newer())
 		{
@@ -135,7 +136,12 @@ void roothide_launchd_postinit(bool firstLoad)
 #endif
 	}
 	else
-	{		
+	{
+		// After userspace reboot, re-assert developer mode before spawning apps.
+		if (roothide_is_ios16_or_newer()) {
+			ensureDeveloperModeEnabled();
+		}
+
 		NSString* systemhookFilePath = [NSString stringWithFormat:@"%@/systemhook-%016llX.dylib", JBROOT_PATH(@"/basebin"), jbinfo(jbrand)];
 
 		if([NSFileManager.defaultManager fileExistsAtPath:JBROOT_PATH(@"/basebin/systemhook.dylib")])
@@ -143,7 +149,7 @@ void roothide_launchd_postinit(bool firstLoad)
 			[NSFileManager.defaultManager removeItemAtPath:systemhookFilePath error:nil];
 			assert([NSFileManager.defaultManager moveItemAtPath:JBROOT_PATH(@"/basebin/systemhook.dylib") toPath:systemhookFilePath error:nil]);
 		}
-		
+
 		assert(unsandbox("/usr/lib", systemhookFilePath.fileSystemRepresentation) == 0);
 
 		//new "real path"

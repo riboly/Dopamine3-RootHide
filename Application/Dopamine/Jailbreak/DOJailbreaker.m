@@ -327,6 +327,10 @@ sets[idx] = NULL;
 - (NSError *)ensureDevModeEnabled
 {
     if (@available(iOS 16.0, *)) {
+        // Prefer the shared RootHide helper (handles AMFI + TXM storage).
+        ensureDeveloperModeEnabled();
+
+        // Belt-and-suspenders: also write the classic AMFI pointer path used by stock Dopamine.
         uint64_t developerModeStorage = 0;
         if (ksymbol(developer_mode_enabled)) {
             developerModeStorage = kread64(ksymbol(developer_mode_enabled));
@@ -560,17 +564,15 @@ void *boomerang_server(struct boomerang_info *info)
 
 - (NSError *)cleanUpPostExploitation
 {
+    // On iOS 17+ stock Dopamine drops temporary root credentials here. That is
+    // fine when the process keeps running, but our success path immediately
+    // calls finalize -> rebootUserspace which needs root (setuid/exec).
+    // Dropping uid to 501 first makes setuid(0) fail silently, so the UI fades
+    // to black and never userspace-reboots. Keep root until reboot.
     if (@available(iOS 17.0, *)) {
-        uint64_t proc = proc_self();
-        uint64_t ucred = proc_ucred(proc);
-
-        // Restore the temporary root credentials before returning to userspace.
-        kwrite32(ucred + koffsetof(ucred, svuid), 501);
-        kwrite32(ucred + koffsetof(ucred, ruid), 501);
-        kwrite32(ucred + koffsetof(ucred, uid), 501);
-        kwrite32(ucred + koffsetof(ucred, rgid), 501);
-        kwrite32(ucred + koffsetof(ucred, svgid), 501);
-        kwrite32(ucred + koffsetof(ucred, groups), 501);
+        // Intentionally leave elevated credentials for finalize/rebootUserspace.
+        // A userspace reboot reaps this process; no need to restore 501.
+        (void)0;
     }
     return nil;
 }
@@ -681,6 +683,14 @@ void *boomerang_server(struct boomerang_info *info)
         [self cleanUpPostExploitation];
         return;
     }
+    // launchdhook may have touched AMFI state during firstLoad; re-force developer mode.
+    *errOut = [self ensureDevModeEnabled];
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
+    // After the launchd hook is initialized, we need to make the app believe the device is jailbroken
+    [[DOEnvironmentManager sharedManager] setJailbroken:YES];
     
 /*
     // Now that we can, protect important system files by bind mounting on top of them
@@ -756,6 +766,30 @@ setenv("DYLD_INSERT_LIBRARIES", JBROOT_PATH("/basebin/systemhook.dylib"), 1);
 
 - (void)finalize
 {
+    // Ensure developer mode is still on immediately before userspace reboot so
+    // SpringBoard/launchd restart does not present "enable Developer Mode" for
+    // newly uicache'd Sileo / RootHide apps.
+    [self ensureDevModeEnabled];
+
+    // Guarantee root for rebootUserspace even if something restored credentials.
+    uint64_t proc = proc_self();
+    if (proc) {
+        uint64_t ucred = proc_ucred(proc);
+        if (ucred) {
+            kwrite32(proc + koffsetof(proc, svuid), 0);
+            kwrite32(ucred + koffsetof(ucred, svuid), 0);
+            kwrite32(ucred + koffsetof(ucred, ruid), 0);
+            kwrite32(ucred + koffsetof(ucred, uid), 0);
+            kwrite32(proc + koffsetof(proc, svgid), 0);
+            kwrite32(ucred + koffsetof(ucred, rgid), 0);
+            kwrite32(ucred + koffsetof(ucred, svgid), 0);
+            kwrite32(ucred + koffsetof(ucred, groups), 0);
+        }
+    }
+    setuid(0);
+    setgid(0);
+    usleep(200 * 1000);
+
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Rebooting Userspace") debug:NO];
     [[DOEnvironmentManager sharedManager] rebootUserspace];
 }

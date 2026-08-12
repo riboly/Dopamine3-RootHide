@@ -63,7 +63,8 @@ int randomizeAndLoadBasebinTrustcache(const char* basebinPath);
 
 bool otherJailbreakActived(bool postexploit);
 
-void hideDeveloperMode();
+void hideDeveloperMode(void);
+void ensureDeveloperModeEnabled(void);
 
 void exec_set_patch(bool enabled);
 int exec_cmd_roothide_spawn(pid_t* pidp, const char* path, const posix_spawn_file_actions_t *fap, const posix_spawnattr_t *attrp, char *const argv[], char *const envp[]);

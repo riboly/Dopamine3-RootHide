@@ -513,38 +513,39 @@ void oid_insert(struct sysctl_oid_list* oid_parent, struct sysctl_oid* oid)
     }
 }
 
-void hideDeveloperMode()
+// Force AMFI developer-mode storage on so ad-hoc / TrollStore / jailbreak apps
+// can launch without the Settings "Developer Mode" prompt requiring a full reboot.
+// Safe no-op if symbols are missing or KRW is not ready.
+void ensureDeveloperModeEnabled(void)
 {
-    uint64_t developer_mode_status_oidp = ksymbol(developer_mode_status)-offsetof(struct sysctl_oid,oid_name);
-    uint64_t launch_env_logging_oidp = ksymbol(launch_env_logging)-offsetof(struct sysctl_oid,oid_name);
+	if (!gPrimitives.kreadbuf || !gPrimitives.kwritebuf) return;
 
-    struct sysctl_oid developer_mode_status={0};
-    kreadbuf(developer_mode_status_oidp, &developer_mode_status, sizeof(developer_mode_status));
+	// Classic AMFI bool pointer (pre-SPTM / still present on A12 PPL devices).
+	if (ksymbol(developer_mode_enabled)) {
+		uint64_t storage = kread64(ksymbol(developer_mode_enabled));
+		if (storage) {
+			kwrite8(storage, 1);
+		}
+	}
 
-    struct sysctl_oid launch_env_logging={0};
-    kreadbuf(launch_env_logging_oidp, &launch_env_logging, sizeof(launch_env_logging));
+	// TXM storage (SPTM devices); harmless if symbol is zero.
+	if (ksymbol_txm(txm_developer_mode_storage)) {
+		kwrite8(ksymbol_txm(txm_developer_mode_storage), 1);
+	}
+}
 
-    //detach
-    oid_remove(developer_mode_status.oid_parent, (struct sysctl_oid*)developer_mode_status_oidp);
-    oid_remove(launch_env_logging.oid_parent, (struct sysctl_oid*)launch_env_logging_oidp);
-
-    //reorder
-    kwrite32(developer_mode_status_oidp+offsetof(struct sysctl_oid,oid_number), (uint64_t)launch_env_logging.oid_number);
-    kwrite32(launch_env_logging_oidp+offsetof(struct sysctl_oid,oid_number), (uint64_t)developer_mode_status.oid_number);
-
-    //exchange data
-    kwrite64(developer_mode_status_oidp+offsetof(struct sysctl_oid,oid_name), (uint64_t)launch_env_logging.oid_name);
-    kwrite64(launch_env_logging_oidp+offsetof(struct sysctl_oid,oid_name), (uint64_t)developer_mode_status.oid_name);
-
-    kwrite64(developer_mode_status_oidp+offsetof(struct sysctl_oid,oid_descr), (uint64_t)launch_env_logging.oid_descr);
-    kwrite64(launch_env_logging_oidp+offsetof(struct sysctl_oid,oid_descr), (uint64_t)developer_mode_status.oid_descr);
-
-    kwrite32(developer_mode_status_oidp+offsetof(struct sysctl_oid,oid_kind), (uint64_t)launch_env_logging.oid_kind);
-    kwrite32(launch_env_logging_oidp+offsetof(struct sysctl_oid,oid_kind), (uint64_t)developer_mode_status.oid_kind);
-
-    //attach
-    oid_insert(developer_mode_status.oid_parent, (struct sysctl_oid*)developer_mode_status_oidp);
-    oid_insert(launch_env_logging.oid_parent, (struct sysctl_oid*)launch_env_logging_oidp);
+// Historical RootHide stealth: swap developer_mode_status / launch_env_logging
+// sysctl OIDs so detectors cannot query developer mode by name.
+//
+// On iOS 16+ (especially 18), this breaks Settings and app launch because the
+// real developer-mode handler is no longer reachable under its public name —
+// users then see "Developer Mode required" for Sileo/RootHide after a
+// successful jailbreak. Keep the symbol for ABI, but do NOT mutate the tree.
+void hideDeveloperMode(void)
+{
+	// Intentionally disabled. Force-enable storage instead of hiding the OID.
+	ensureDeveloperModeEnabled();
+	JBLogDebug("hideDeveloperMode: skipped OID swap; developer mode force-enabled");
 }
 
 int randomizeAndLoadBasebinTrustcache(const char* basebinPath)
