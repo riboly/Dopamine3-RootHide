@@ -133,9 +133,20 @@ char *jbclient_get_boot_uuid(void)
 // Local trust path used when the process already has kernel r/w (Dopamine app
 // mid-jailbreak). Avoids depending on launchd XPC which can fail before
 // systemhook/checkin is fully active, producing "Failed to trust binary".
+//
+// systemhook links this file without signatures/trustcache objects, so keep
+// those dependencies weak and skip local trust when unavailable.
+void file_collect_untrusted_cdhashes(int fd, cdhash_t **cdhashesOut, uint32_t *cdhashCountOut) __attribute__((weak));
+void file_collect_signatures(int fd, struct siginfo **sigInfosOut, uint32_t *sigInfoCountOut) __attribute__((weak));
+int trust_signatures(int pid, int fd, struct siginfo *sigInfos, uint32_t sigInfoCount) __attribute__((weak));
+int jb_trustcache_add_cdhashes(cdhash_t *hashes, uint32_t hashCount) __attribute__((weak));
+
 static int jbclient_trust_file_local(int fd)
 {
 	if (!gPrimitives.kreadbuf) return -1;
+	if (!file_collect_untrusted_cdhashes || !file_collect_signatures || !trust_signatures || !jb_trustcache_add_cdhashes) {
+		return -1;
+	}
 
 	cdhash_t *cdhashes = NULL;
 	uint32_t cdhashesCount = 0;
@@ -160,6 +171,12 @@ static int jbclient_trust_file_local(int fd)
 
 int jbclient_trust_file(int fd, struct siginfo *siginfo, bool attach)
 {
+	// Prefer local trust first when primitives exist (first jailbreak pass in app).
+	if (!siginfo && gPrimitives.kreadbuf) {
+		int local = jbclient_trust_file_local(fd);
+		if (local == 0) return 0;
+	}
+
 	xpc_object_t xargs = xpc_dictionary_create_empty();
 	xpc_dictionary_set_uint64(xargs, "fd", (uint64_t)fd);
 	if (siginfo) {
@@ -172,10 +189,9 @@ int jbclient_trust_file(int fd, struct siginfo *siginfo, bool attach)
 		int64_t result = xpc_dictionary_get_int64(xreply, "result");
 		xpc_release(xreply);
 		if (result == 0) return 0;
-		// Fall through to local path when launchd reports failure.
 	}
 
-	// Prefer local trust when we already have primitives (first jailbreak pass).
+	// XPC failed: try local once more (covers case where kread became available mid-call).
 	if (!siginfo) {
 		int local = jbclient_trust_file_local(fd);
 		if (local == 0) return 0;
