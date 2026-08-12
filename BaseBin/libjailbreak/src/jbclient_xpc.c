@@ -1,6 +1,8 @@
 #include "jbclient_xpc.h"
 #include "jbclient_mach.h"
 #include "jbserver.h"
+#include "primitives.h"
+#include "trustcache.h"
 #include <dispatch/dispatch.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
@@ -128,6 +130,34 @@ char *jbclient_get_boot_uuid(void)
 	return (char *)&bootUUID[0];
 }
 
+// Local trust path used when the process already has kernel r/w (Dopamine app
+// mid-jailbreak). Avoids depending on launchd XPC which can fail before
+// systemhook/checkin is fully active, producing "Failed to trust binary".
+static int jbclient_trust_file_local(int fd)
+{
+	if (!gPrimitives.kreadbuf) return -1;
+
+	cdhash_t *cdhashes = NULL;
+	uint32_t cdhashesCount = 0;
+	file_collect_untrusted_cdhashes(fd, &cdhashes, &cdhashesCount);
+	if (cdhashes && cdhashesCount > 0) {
+		jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
+		free(cdhashes);
+	}
+
+	struct siginfo *sigInfos = NULL;
+	uint32_t sigInfoCount = 0;
+	file_collect_signatures(fd, &sigInfos, &sigInfoCount);
+	int r = trust_signatures(getpid(), fd, sigInfos, sigInfoCount);
+	for (uint32_t i = 0; i < sigInfoCount; i++) {
+		if (sigInfos[i].source == SIGNATURE_SOURCE_ALLOCATION) {
+			free(sigInfos[i].signature.fs_blob_start);
+		}
+	}
+	free(sigInfos);
+	return r;
+}
+
 int jbclient_trust_file(int fd, struct siginfo *siginfo, bool attach)
 {
 	xpc_object_t xargs = xpc_dictionary_create_empty();
@@ -141,7 +171,14 @@ int jbclient_trust_file(int fd, struct siginfo *siginfo, bool attach)
 	if (xreply) {
 		int64_t result = xpc_dictionary_get_int64(xreply, "result");
 		xpc_release(xreply);
-		return result;
+		if (result == 0) return 0;
+		// Fall through to local path when launchd reports failure.
+	}
+
+	// Prefer local trust when we already have primitives (first jailbreak pass).
+	if (!siginfo) {
+		int local = jbclient_trust_file_local(fd);
+		if (local == 0) return 0;
 	}
 	return -1;
 }

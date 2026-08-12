@@ -518,6 +518,10 @@ struct jbserver_domain gSystemwideDomain = {
 				{ .name = "caller-token", .type = JBS_TYPE_CALLER_TOKEN, .out = false },
 				{ .name = "fd", .type = JBS_TYPE_UINT64, .out = false },
 				{ .name = "siginfo", .type = JBS_TYPE_DATA, .out = false },
+				// Must match stock Dopamine: JBS_TYPE_DATA occupies two slots (buf,len),
+				// then attach. Missing this shifts nothing for NULL-siginfo calls but
+				// breaks callers that pass siginfo+attach.
+				{ .name = "attach", .type = JBS_TYPE_BOOL, .out = false },
 				{ 0 },
 			},
 		},
