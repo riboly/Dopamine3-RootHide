@@ -912,11 +912,6 @@ Types: deb\n\
 URIs: https://roothide.github.io/procursus\n\
 Suites: iphoneos-arm64e/%d\n\
 Components: main\n\
-\n\
-Types: deb\n\
-URIs: https://github.com/roothide/roothide.github.io/releases/download/%d/\n\
-Suites: ./\n\
-Components:\n\
 "
 
 // #define ALT_SOURCES "\
@@ -939,7 +934,6 @@ deb https://yourepo.com/ ./\n\
 deb https://havoc.app/ ./\n\
 deb https://roothide.github.io/ ./\n\
 deb https://roothide.github.io/procursus iphoneos-arm64e/%d main\n\
-deb https://github.com/roothide/roothide.github.io/releases/download/%d/ ./\n\
 \n\
 "
 
@@ -963,12 +957,75 @@ int getCFMajorVersion(void)
     return [NSString stringWithFormat:@"%d", getCFMajorVersion()];
 }
 
+-(int) migratePackageSources:(void (^)(NSError *))completion
+{
+    NSFileManager* fm = NSFileManager.defaultManager;
+
+    // Older RootHide ports added a GitHub release URL whose root directory is
+    // not a valid APT distribution. Remove that stanza from any Sileo-managed
+    // source file and discard its cached indexes before the next refresh.
+    NSString *obsoleteSource = [NSString stringWithFormat:@"https://github.com/roothide/roothide.github.io/releases/download/%d/", getCFMajorVersion()];
+    NSArray *sourceDirectories = @[
+        jbrootPrefix(@"/etc/apt/sources.list.d"),
+        jbrootPrefix(@"/etc/apt/sileo.list.d"),
+    ];
+    for (NSString *directory in sourceDirectories) {
+        for (NSString *name in [fm contentsOfDirectoryAtPath:directory error:nil]) {
+            NSString *path = [directory stringByAppendingPathComponent:name];
+            NSString *contents = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+            if (!contents || ![contents containsString:obsoleteSource]) continue;
+
+            NSMutableArray *kept = [NSMutableArray array];
+            BOOL isDeb822 = [path.pathExtension isEqualToString:@"sources"];
+            if (isDeb822) {
+                for (NSString *stanza in [contents componentsSeparatedByString:@"\n\n"]) {
+                    if (![stanza containsString:obsoleteSource] && stanza.length > 0) {
+                        [kept addObject:stanza];
+                    }
+                }
+            } else {
+                for (NSString *line in [contents componentsSeparatedByString:@"\n"]) {
+                    if (![line containsString:obsoleteSource]) {
+                        [kept addObject:line];
+                    }
+                }
+            }
+
+            NSString *cleaned = [kept componentsJoinedByString:isDeb822 ? @"\n\n" : @"\n"];
+            if (cleaned.length == 0 || [cleaned stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length == 0) {
+                [fm removeItemAtPath:path error:nil];
+            } else {
+                ASSERT([cleaned writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+            }
+        }
+    }
+
+    NSString *obsoleteCachePrefix = [NSString stringWithFormat:@"github.com_roothide_roothide.github.io_releases_download_%d", getCFMajorVersion()];
+    NSArray *cacheDirectories = @[
+        jbrootPrefix(@"/var/lib/apt/lists"),
+        jbrootPrefix(@"/var/lib/apt/sileolists"),
+    ];
+    for (NSString *directory in cacheDirectories) {
+        for (NSString *name in [fm contentsOfDirectoryAtPath:directory error:nil]) {
+            if ([name hasPrefix:obsoleteCachePrefix]) {
+                [fm removeItemAtPath:[directory stringByAppendingPathComponent:name] error:nil];
+            }
+        }
+    }
+
+    return 0;
+}
+
 -(int) buildPackageSources:(void (^)(NSError *))completion
 {
     NSFileManager* fm = NSFileManager.defaultManager;
-    
+
     ASSERT([[NSString stringWithFormat:@(DEFAULT_SOURCES), getCFMajorVersion(), getCFMajorVersion()] writeToFile:jbrootPrefix(@"/etc/apt/sources.list.d/default.sources") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
-    
+
+    if([self migratePackageSources:completion] != 0) {
+        return -1;
+    }
+
     // //Users in some regions seem to be unable to access github.io
     // if([NSLocale.currentLocale.countryCode isEqualToString:@"CN"]) {
     //     ASSERT([[NSString stringWithFormat:@(ALT_SOURCES), getCFMajorVersion()] writeToFile:jbrootPrefix(@"/etc/apt/sources.list.d/sileo.sources") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
@@ -1085,6 +1142,10 @@ int getCFMajorVersion(void)
     find_jbroot(YES); //refresh
     
     //jbrootPrefix() and jbrand_current() available now
+
+    if([self migratePackageSources:completion] != 0) {
+        return -1;
+    }
 
     return 0;
 }
@@ -1367,7 +1428,7 @@ int getCFMajorVersion(void)
     
     if (shouldInstallLibkrw || shouldInstallBasebinLink) {
         [[DOUIManager sharedInstance] sendLog:@"Updating Bundled Packages" debug:NO];
-        
+
         if (shouldInstallLibkrw) {
             NSString *libkrwPath = [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"libkrw-dopamine.deb"];
             int r = [self installPackage:libkrwPath];
