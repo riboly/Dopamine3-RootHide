@@ -957,9 +957,40 @@ int getCFMajorVersion(void)
     return [NSString stringWithFormat:@"%d", getCFMajorVersion()];
 }
 
+// Sileo keeps its repository indexes in a separate state directory. The
+// bootstrap tarball only guarantees the regular apt directories, so create
+// both trees before Sileo or dpkg is launched.
+-(void) ensureAptInfrastructure
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSArray *directories = @[
+        jbrootPrefix(@"/var/lib/apt"),
+        jbrootPrefix(@"/var/lib/apt/lists"),
+        jbrootPrefix(@"/var/lib/apt/lists/partial"),
+        jbrootPrefix(@"/var/lib/apt/sileolists"),
+        jbrootPrefix(@"/var/lib/apt/sileolists/partial"),
+        jbrootPrefix(@"/etc/apt/sources.list.d"),
+        jbrootPrefix(@"/etc/apt/sileo.list.d"),
+    ];
+    NSDictionary *attributes = @{
+        NSFilePosixPermissions: @(0755),
+        NSFileOwnerAccountID: @(0),
+        NSFileGroupOwnerAccountID: @(0),
+    };
+    for (NSString *directory in directories) {
+        if (![fm fileExistsAtPath:directory]) {
+            [fm createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:attributes error:nil];
+        }
+        chown(directory.fileSystemRepresentation, 0, 0);
+        chmod(directory.fileSystemRepresentation, 0755);
+    }
+}
+
 -(int) migratePackageSources:(void (^)(NSError *))completion
 {
     NSFileManager* fm = NSFileManager.defaultManager;
+
+    [self ensureAptInfrastructure];
 
     // Older RootHide ports added a GitHub release URL whose root directory is
     // not a valid APT distribution. Remove that stanza from any Sileo-managed
@@ -970,10 +1001,28 @@ int getCFMajorVersion(void)
         jbrootPrefix(@"/etc/apt/sileo.list.d"),
     ];
     for (NSString *directory in sourceDirectories) {
+        if (![fm fileExistsAtPath:directory]) {
+            NSDictionary *attributes = @{
+                NSFilePosixPermissions: @(0755),
+                NSFileOwnerAccountID: @(0),
+                NSFileGroupOwnerAccountID: @(0),
+            };
+            [fm createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:attributes error:nil];
+        }
         for (NSString *name in [fm contentsOfDirectoryAtPath:directory error:nil]) {
             NSString *path = [directory stringByAppendingPathComponent:name];
             NSString *contents = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-            if (!contents || ![contents containsString:obsoleteSource]) continue;
+            if (!contents) continue;
+
+            // The stock bootstrap source is for rootless arm64. Leaving it
+            // beside the RootHide arm64e source makes Sileo resolve packages
+            // against apt.procurs.us, which produces the exact missing-folder
+            // error reported by the user.
+            if ([name.lowercaseString containsString:@"procursus"] && [contents containsString:@"apt.procurs.us"]) {
+                [fm removeItemAtPath:path error:nil];
+                continue;
+            }
+            if (![contents containsString:obsoleteSource]) continue;
 
             NSMutableArray *kept = [NSMutableArray array];
             BOOL isDeb822 = [path.pathExtension isEqualToString:@"sources"];
@@ -1007,7 +1056,7 @@ int getCFMajorVersion(void)
     ];
     for (NSString *directory in cacheDirectories) {
         for (NSString *name in [fm contentsOfDirectoryAtPath:directory error:nil]) {
-            if ([name hasPrefix:obsoleteCachePrefix]) {
+            if ([name hasPrefix:obsoleteCachePrefix] || [name hasPrefix:@"apt.procurs.us_"]) {
                 [fm removeItemAtPath:[directory stringByAppendingPathComponent:name] error:nil];
             }
         }
@@ -1020,11 +1069,22 @@ int getCFMajorVersion(void)
 {
     NSFileManager* fm = NSFileManager.defaultManager;
 
+    [self ensureAptInfrastructure];
     ASSERT([[NSString stringWithFormat:@(DEFAULT_SOURCES), getCFMajorVersion(), getCFMajorVersion()] writeToFile:jbrootPrefix(@"/etc/apt/sources.list.d/default.sources") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
 
     if([self migratePackageSources:completion] != 0) {
         return -1;
     }
+
+    // Replace the rootless bootstrap's apt.procurs.us source with the
+    // RootHide arm64e Procursus distribution. This file is separate from
+    // default.sources and must be rewritten on every re-jailbreak.
+    NSString *roothideProcursus = [NSString stringWithFormat:
+        @"Types: deb\n"
+        @"URIs: https://roothide.github.io/procursus\n"
+        @"Suites: iphoneos-arm64e/%d\n"
+        @"Components: main\n", getCFMajorVersion()];
+    ASSERT([roothideProcursus writeToFile:jbrootPrefix(@"/etc/apt/sources.list.d/procursus.sources") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
 
     // //Users in some regions seem to be unable to access github.io
     // if([NSLocale.currentLocale.countryCode isEqualToString:@"CN"]) {
@@ -1143,7 +1203,7 @@ int getCFMajorVersion(void)
     
     //jbrootPrefix() and jbrand_current() available now
 
-    if([self migratePackageSources:completion] != 0) {
+    if([self buildPackageSources:completion] != 0) {
         return -1;
     }
 

@@ -52,6 +52,7 @@
 "Button_Unhide_Jailbreak" = "Unhide Jailbreak";
 "Button_Refresh_Jailbreak_Apps" = "Refresh Jailbreak Apps";
 "Button_Reinstall_Package_Managers" = "Reinstall Package Managers";
+"Button_Export_RootHide_Diagnostics" = "Export RootHide Package Diagnostics";
 "Button_Change_Mobile_Password" = "Change \"mobile\" Password";
 
 // Settings Hints

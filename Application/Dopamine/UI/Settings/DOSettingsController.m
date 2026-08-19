@@ -9,6 +9,10 @@
 #import <objc/runtime.h>
 #import <Photos/Photos.h>
 #import <libjailbreak/util.h>
+#import <errno.h>
+#import <string.h>
+#import <sys/stat.h>
+#import <unistd.h>
 #import "DOUIManager.h"
 #import "DOPkgManagerPickerViewController.h"
 #import "DOHeaderCell.h"
@@ -24,6 +28,119 @@
 @interface DOSettingsController ()
 
 @end
+
+static NSString *RHDiagnosticPath(NSString *root, NSString *relativePath)
+{
+    return [root stringByAppendingPathComponent:relativePath];
+}
+
+static void RHAppendDiagnosticStat(NSMutableString *output, NSString *root, NSString *relativePath)
+{
+    NSString *path = RHDiagnosticPath(root, relativePath);
+    struct stat st = {0};
+    if (lstat(path.fileSystemRepresentation, &st) != 0) {
+        [output appendFormat:@"PATH %@\n  missing errno=%d (%s)\n", relativePath, errno, strerror(errno)];
+        return;
+    }
+
+    [output appendFormat:@"PATH %@\n  mode=%o uid=%d gid=%d size=%lld\n",
+        relativePath, st.st_mode & 07777, st.st_uid, st.st_gid, (long long)st.st_size];
+
+    if (S_ISLNK(st.st_mode)) {
+        char link[PATH_MAX + 1] = {0};
+        ssize_t length = readlink(path.fileSystemRepresentation, link, PATH_MAX);
+        if (length > 0) {
+            link[length] = '\0';
+            [output appendFormat:@"  symlink=%s\n", link];
+        }
+    }
+
+    if (!S_ISDIR(st.st_mode)) return;
+
+    NSArray<NSString *> *children = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:path error:nil];
+    children = [children sortedArrayUsingSelector:@selector(compare:)];
+    for (NSString *child in children) {
+        struct stat childStat = {0};
+        NSString *childPath = [path stringByAppendingPathComponent:child];
+        if (lstat(childPath.fileSystemRepresentation, &childStat) == 0) {
+            [output appendFormat:@"  %@ mode=%o uid=%d gid=%d size=%lld%@\n",
+                child, childStat.st_mode & 07777, childStat.st_uid, childStat.st_gid,
+                (long long)childStat.st_size, S_ISDIR(childStat.st_mode) ? @"/" : @""];
+        } else {
+            [output appendFormat:@"  %@ stat_errno=%d (%s)\n", child, errno, strerror(errno)];
+        }
+    }
+}
+
+static void RHAppendDiagnosticText(NSMutableString *output, NSString *root, NSString *relativePath, NSUInteger maxLength)
+{
+    NSString *path = RHDiagnosticPath(root, relativePath);
+    NSError *error = nil;
+    NSString *contents = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&error];
+    if (!contents) {
+        [output appendFormat:@"TEXT %@\n  unavailable=%@\n", relativePath, error.localizedDescription ?: @"unknown error"];
+        return;
+    }
+    if (contents.length > maxLength) {
+        contents = [contents substringToIndex:maxLength];
+        [output appendFormat:@"TEXT %@ (truncated)\n%@\n", relativePath, contents];
+    } else {
+        [output appendFormat:@"TEXT %@\n%@\n", relativePath, contents];
+    }
+}
+
+static NSString *RHBuildPackageDiagnostic(void)
+{
+    NSMutableString *output = [NSMutableString stringWithString:@"Dopamine RootHide package diagnostic\n"];
+    [output appendFormat:@"generated=%@\nuid=%d euid=%d gid=%d\n",
+        [NSDate date], getuid(), geteuid(), getgid()];
+
+    NSString *root = gSystemInfo.jailbreakInfo.rootPath ?
+        [NSString stringWithUTF8String:gSystemInfo.jailbreakInfo.rootPath] : nil;
+    [output appendFormat:@"jbroot=%@\n\n", root ?: @"<nil>"];
+    if (!root.length) return output;
+
+    NSArray<NSString *> *pathSnapshots = @[
+        @"/var/jb",
+        @"/etc/apt/sources.list.d",
+        @"/etc/apt/sileo.list.d",
+        @"/var/lib/apt",
+        @"/var/lib/apt/lists",
+        @"/var/lib/apt/sileolists",
+        @"/var/lib/dpkg/status",
+        @"/var/mobile/Library/Logs/Sileo.log",
+        @"/var/mobile/Library/Logs/SileoStore.log",
+    ];
+    for (NSString *relativePath in pathSnapshots) {
+        RHAppendDiagnosticStat(output, root, relativePath);
+    }
+
+    NSArray<NSString *> *textSnapshots = @[
+        @"/etc/apt/sources.list.d/default.sources",
+        @"/etc/apt/sources.list.d/procursus.sources",
+        @"/etc/apt/sources.list.d/sileo.sources",
+        @"/var/mobile/Library/Application Support/xyz.willy.Zebra/sources.list",
+    ];
+    for (NSString *relativePath in textSnapshots) {
+        RHAppendDiagnosticText(output, root, relativePath, 128 * 1024);
+    }
+
+    NSString *statusPath = RHDiagnosticPath(root, @"/var/lib/dpkg/status");
+    NSString *status = [NSString stringWithContentsOfFile:statusPath encoding:NSUTF8StringEncoding error:nil];
+    if (status.length) {
+        [output appendString:@"PACKAGES (selected status records)\n"];
+        for (NSString *record in [status componentsSeparatedByString:@"\n\n"]) {
+            if ([record containsString:@"Package: org.coolstar.sileo"] ||
+                [record containsString:@"Package: apt"] ||
+                [record containsString:@"Package: dpkg"] ||
+                [record containsString:@"Package: libroot"] ||
+                [record containsString:@"Package: roothide"]) {
+                [output appendFormat:@"%@\n\n", record];
+            }
+        }
+    }
+    return output;
+}
 
 @implementation DOSettingsController
 
@@ -311,6 +428,14 @@
                         [reinstallPackageManagersSpecifier setProperty:@"shippingbox" forKey:@"image"];
                     [reinstallPackageManagersSpecifier setProperty:@"reinstallPackageManagersPressed" forKey:@"action"];
                     [specifiers addObject:reinstallPackageManagersSpecifier];
+
+                    PSSpecifier *diagnosticSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
+                    [diagnosticSpecifier setProperty:@"Button_Export_RootHide_Diagnostics" forKey:@"title"];
+                    [diagnosticSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
+                    [diagnosticSpecifier setProperty:buttonHeight forKey:@"height"];
+                    [diagnosticSpecifier setProperty:@"doc.text.magnifyingglass" forKey:@"image"];
+                    [diagnosticSpecifier setProperty:@"exportRootHidePackageDiagnosticsPressed" forKey:@"action"];
+                    [specifiers addObject:diagnosticSpecifier];
 
                     PSSpecifier *addMountSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
                     [addMountSpecifier setProperty:@"Mount_Add_Title" forKey:@"title"];
@@ -648,6 +773,35 @@
 - (void)reinstallPackageManagersPressed
 {
     [self.navigationController pushViewController:[[DOPkgManagerPickerViewController alloc] init] animated:YES];
+}
+
+- (void)exportRootHidePackageDiagnosticsPressed
+{
+    NSString *diagnostic = nil;
+    DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
+    [environmentManager runAsRoot:^{
+        [environmentManager runUnsandboxed:^{
+            diagnostic = RHBuildPackageDiagnostic();
+        }];
+    }];
+
+    if (!diagnostic.length) {
+        diagnostic = @"Dopamine RootHide package diagnostic\nNo jailbreak root was available.\n";
+    }
+
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/RootHide-package-diagnostic.txt"];
+    NSError *error = nil;
+    if (![diagnostic writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Log_Error") message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+
+    UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[[NSURL fileURLWithPath:path]] applicationActivities:nil];
+    activity.popoverPresentationController.sourceView = self.view;
+    activity.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds), 1, 1);
+    [self presentViewController:activity animated:YES completion:nil];
 }
 
 - (void)changeMobilePasswordWithAuthenticationPressed
