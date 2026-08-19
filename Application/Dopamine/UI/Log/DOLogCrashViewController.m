@@ -15,6 +15,9 @@
 @interface DOLogCrashViewController ()
 
 @property (nonatomic, retain) NSString *title;
+@property (nonatomic, assign) BOOL exitOnDisappear;
+@property (nonatomic, retain) NSObject<DOLogViewProtocol> *previousLogView;
+@property (nonatomic, retain) NSMutableArray<NSString *> *pendingLogs;
 
 @end
 
@@ -22,9 +25,15 @@
 
 - (id)initWithTitle:(NSString*)title
 {
-    if (self = [super init])
-    {
+    return [self initWithTitle:title exitOnDisappear:YES];
+}
+
+- (id)initWithTitle:(NSString *)title exitOnDisappear:(BOOL)exitOnDisappear
+{
+    if (self = [super init]) {
         self.title = title;
+        self.exitOnDisappear = exitOnDisappear;
+        self.pendingLogs = [NSMutableArray array];
     }
     return self;
 }
@@ -34,7 +43,8 @@
     [super viewDidLoad];
     [DOPSListController setupViewControllerStyle:self];
 
-    UIView *header = [DOPSListItemsController makeHeader:DOLocalizedString(@"Log_Error") withTarget:self];
+    NSString *headerTitle = self.exitOnDisappear ? DOLocalizedString(@"Log_Error") : (self.title ?: DOLocalizedString(@"Log_Error"));
+    UIView *header = [DOPSListItemsController makeHeader:headerTitle withTarget:self];
     header.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:header];
 
@@ -77,20 +87,54 @@
         [_logView.bottomAnchor constraintEqualToAnchor:shareButton.topAnchor constant:-10]
     ]];
 
-    NSArray *reverseLog = [[[DOUIManager sharedInstance] logRecord] reverseObjectEnumerator].allObjects;
-    _logView.text = [reverseLog componentsJoinedByString:@"\n"];
+    if (self.exitOnDisappear) {
+        NSArray *reverseLog = [[[DOUIManager sharedInstance] logRecord] reverseObjectEnumerator].allObjects;
+        _logView.text = [reverseLog componentsJoinedByString:@"\n"];
+    } else {
+        _logView.text = @"";
+    }
     _logView.editable = NO;
     _logView.font = [UIFont systemFontOfSize:14];
     _logView.textColor = [UIColor whiteColor];
     _logView.backgroundColor = [UIColor clearColor];
+
+    self.previousLogView = [DOUIManager sharedInstance].logView;
+    [DOUIManager sharedInstance].logView = (id<DOLogViewProtocol>)self;
+    for (NSString *pendingLog in self.pendingLogs) {
+        [self showLog:pendingLog];
+    }
+    [self.pendingLogs removeAllObjects];
+}
+
+- (void)showLog:(NSString *)log
+{
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self showLog:log]; });
+        return;
+    }
+    if (!_logView) {
+        if (log) [self.pendingLogs addObject:log];
+        return;
+    }
+    _logView.text = [[_logView.text ?: @""] stringByAppendingFormat:@"%@\n", log ?: @""];
+    [_logView scrollRangeToVisible:NSMakeRange(_logView.text.length, 0)];
+}
+
+- (void)didComplete
+{
 }
 
 - (void)viewWillDisappear:(BOOL)animated
 {
     [super viewWillDisappear:animated];
-    [[UIApplication sharedApplication] performSelector:@selector(suspend)];
-    [NSThread sleepForTimeInterval:0.3];
-    exit(0);
+    if ([DOUIManager sharedInstance].logView == (id<DOLogViewProtocol>)self) {
+        [DOUIManager sharedInstance].logView = self.previousLogView;
+    }
+    if (self.exitOnDisappear) {
+        [[UIApplication sharedApplication] performSelector:@selector(suspend)];
+        [NSThread sleepForTimeInterval:0.3];
+        exit(0);
+    }
 }
 
 - (void)dismiss

@@ -972,17 +972,30 @@ int getCFMajorVersion(void)
         jbrootPrefix(@"/etc/apt/sources.list.d"),
         jbrootPrefix(@"/etc/apt/sileo.list.d"),
     ];
-    NSDictionary *attributes = @{
-        NSFilePosixPermissions: @(0755),
-        NSFileOwnerAccountID: @(0),
-        NSFileGroupOwnerAccountID: @(0),
-    };
     for (NSString *directory in directories) {
+        BOOL isSileoListDirectory = [directory hasSuffix:@"/var/lib/apt/sileolists"] ||
+            [directory hasSuffix:@"/var/lib/apt/sileolists/partial"];
+        uid_t owner = isSileoListDirectory ? 501 : 0;
+        gid_t group = isSileoListDirectory ? 501 : 0;
+        NSDictionary *attributes = @{
+            NSFilePosixPermissions: @(0755),
+            NSFileOwnerAccountID: @(owner),
+            NSFileGroupOwnerAccountID: @(group),
+        };
         if (![fm fileExistsAtPath:directory]) {
             [fm createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:attributes error:nil];
         }
-        chown(directory.fileSystemRepresentation, 0, 0);
+        // Sileo/mobile writes repository indexes in sileolists. Keep the
+        // regular apt lists root-owned while repairing existing installs.
+        chown(directory.fileSystemRepresentation, owner, group);
         chmod(directory.fileSystemRepresentation, 0755);
+        if (isSileoListDirectory) {
+            for (NSString *entry in [fm contentsOfDirectoryAtPath:directory error:nil]) {
+                NSString *entryPath = [directory stringByAppendingPathComponent:entry];
+                chown(entryPath.fileSystemRepresentation, owner, group);
+                chmod(entryPath.fileSystemRepresentation, 0755);
+            }
+        }
     }
 }
 

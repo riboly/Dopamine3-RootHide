@@ -220,7 +220,10 @@
 
     [self.logRecord addObject:log];
 
-    NSString *logPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Dopamine-jailbreak.log"];
+    // Credential changes used by RootHide can change NSHomeDirectory(). Resolve
+    // the application container before writing logs from a root context.
+    NSString *documentsPath = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *logPath = [documentsPath stringByAppendingPathComponent:@"Dopamine-jailbreak.log"];
     NSFileHandle *logFile = [NSFileHandle fileHandleForWritingAtPath:logPath];
     if (!logFile) {
         [[NSFileManager defaultManager] createFileAtPath:logPath contents:nil attributes:nil];

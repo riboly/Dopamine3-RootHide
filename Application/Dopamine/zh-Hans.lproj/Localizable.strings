@@ -52,6 +52,8 @@
 "Button_Refresh_Jailbreak_Apps" = "刷新越狱 App";
 "Button_Reinstall_Package_Managers" = "重新安装包管理器";
 "Button_Export_RootHide_Diagnostics" = "导出 RootHide 软件源诊断";
+"Button_Install_Frida" = "安装 RootHide Frida Server";
+"Button_Install_OpenSSH" = "安装 RootHide OpenSSH Server";
 "Button_Change_Mobile_Password" = "修改 “mobile” 密码";
 
 // Settings Hints

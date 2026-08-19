@@ -12,7 +12,10 @@
 #import <errno.h>
 #import <string.h>
 #import <sys/stat.h>
+#import <sys/wait.h>
+#import <spawn.h>
 #import <unistd.h>
+#import <fcntl.h>
 #import "DOUIManager.h"
 #import "DOPkgManagerPickerViewController.h"
 #import "DOHeaderCell.h"
@@ -24,6 +27,9 @@
 #import "DOSceneDelegate.h"
 #import "DOPSJetsamListItemsController.h"
 #import "DOButtonCell.h"
+#import "DOLogCrashViewController.h"
+
+extern char **environ;
 
 @interface DOSettingsController ()
 
@@ -108,6 +114,9 @@ static NSString *RHBuildPackageDiagnostic(void)
         @"/var/lib/apt/lists",
         @"/var/lib/apt/sileolists",
         @"/var/lib/dpkg/status",
+        @"/usr/sbin/sshd",
+        @"/usr/sbin/frida-server",
+        @"/Library/LaunchDaemons/re.frida.server.plist",
         @"/var/mobile/Library/Logs/Sileo.log",
         @"/var/mobile/Library/Logs/SileoStore.log",
     ];
@@ -134,12 +143,181 @@ static NSString *RHBuildPackageDiagnostic(void)
                 [record containsString:@"Package: apt"] ||
                 [record containsString:@"Package: dpkg"] ||
                 [record containsString:@"Package: libroot"] ||
-                [record containsString:@"Package: roothide"]) {
+                [record containsString:@"Package: roothide"] ||
+                [record containsString:@"Package: openssh-server"] ||
+                [record containsString:@"Package: re.frida.server"]) {
                 [output appendFormat:@"%@\n\n", record];
             }
         }
     }
     return output;
+}
+
+static void RHSendInstallLog(NSString *line)
+{
+    NSString *trimmed = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (trimmed.length) {
+        [[DOUIManager sharedInstance] sendLog:trimmed debug:NO];
+    }
+}
+
+static int RHRunInstallCommand(NSArray<NSString *> *arguments)
+{
+    if (arguments.count == 0) return EINVAL;
+
+    int outputPipe[2] = {-1, -1};
+    if (pipe(outputPipe) != 0) return errno;
+
+    char **argv = calloc(arguments.count + 1, sizeof(char *));
+    for (NSUInteger i = 0; i < arguments.count; i++) {
+        argv[i] = strdup(arguments[i].fileSystemRepresentation);
+    }
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&actions, outputPipe[0]);
+
+    pid_t pid = 0;
+    int spawnResult = posix_spawn(&pid, argv[0], &actions, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    close(outputPipe[1]);
+    for (NSUInteger i = 0; i < arguments.count; i++) free(argv[i]);
+    free(argv);
+
+    if (spawnResult != 0) {
+        close(outputPipe[0]);
+        return spawnResult;
+    }
+
+    NSMutableString *pending = [NSMutableString string];
+    char buffer[2048];
+    ssize_t bytesRead = 0;
+    while ((bytesRead = read(outputPipe[0], buffer, sizeof(buffer))) > 0) {
+        NSString *chunk = [[NSString alloc] initWithBytes:buffer length:(NSUInteger)bytesRead encoding:NSUTF8StringEncoding];
+        if (!chunk) chunk = [[NSString alloc] initWithBytes:buffer length:(NSUInteger)bytesRead encoding:NSASCIIStringEncoding];
+        if (!chunk) continue;
+        [pending appendString:chunk];
+        while (YES) {
+            NSRange newline = [pending rangeOfString:@"\n"];
+            if (newline.location == NSNotFound) break;
+            NSString *line = [pending substringToIndex:newline.location];
+            [pending deleteCharactersInRange:NSMakeRange(0, newline.location + 1)];
+            RHSendInstallLog(line);
+        }
+    }
+    close(outputPipe[0]);
+    if (pending.length) RHSendInstallLog(pending);
+
+    int waitStatus = 0;
+    if (waitpid(pid, &waitStatus, 0) < 0) return errno;
+    if (WIFEXITED(waitStatus)) return WEXITSTATUS(waitStatus);
+    if (WIFSIGNALED(waitStatus)) return 128 + WTERMSIG(waitStatus);
+    return ECHILD;
+}
+
+static BOOL RHStatusContainsInstalledPackage(NSString *packageName, NSString *architecture)
+{
+    NSString *statusPath = JBROOT_PATH(@"/var/lib/dpkg/status");
+    NSString *status = [NSString stringWithContentsOfFile:statusPath encoding:NSUTF8StringEncoding error:nil];
+    if (!status.length) return NO;
+    for (NSString *record in [status componentsSeparatedByString:@"\n\n"]) {
+        if ([record containsString:[NSString stringWithFormat:@"Package: %@", packageName]] &&
+            [record containsString:@"Status: install ok installed"] &&
+            (!architecture.length || [record containsString:[NSString stringWithFormat:@"Architecture: %@", architecture]])) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static void RHInstallOpenSSH(void)
+{
+    NSString *apt = JBROOT_PATH(@"/usr/bin/apt-get");
+    if (!apt.length || ![[NSFileManager defaultManager] isExecutableFileAtPath:apt]) {
+        RHSendInstallLog(@"RESULT: FAILED (RootHide apt-get 不存在)");
+        return;
+    }
+
+    RHSendInstallLog(@"使用 RootHide arm64e Procursus 源更新软件包索引");
+    int result = RHRunInstallCommand(@[apt, @"update"]);
+    if (result != 0) {
+        RHSendInstallLog([NSString stringWithFormat:@"apt-get update 失败，退出码 %d", result]);
+        RHSendInstallLog(@"RESULT: FAILED");
+        return;
+    }
+
+    RHSendInstallLog(@"安装 openssh-server (RootHide/iphoneos-arm64e)");
+    result = RHRunInstallCommand(@[apt, @"install", @"-y", @"openssh-server"]);
+    BOOL packageInstalled = RHStatusContainsInstalledPackage(@"openssh-server", @"iphoneos-arm64e");
+    BOOL daemonPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/sbin/sshd")] ||
+        [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/bin/sshd")];
+    if (result == 0 && packageInstalled && daemonPresent) {
+        RHSendInstallLog(@"检测通过：openssh-server 与 sshd 均已安装");
+        RHSendInstallLog(@"RESULT: SUCCESS");
+    } else {
+        RHSendInstallLog([NSString stringWithFormat:@"检测失败：exit=%d package=%d sshd=%d", result, packageInstalled, daemonPresent]);
+        RHSendInstallLog(@"RESULT: FAILED");
+    }
+}
+
+static void RHInstallFridaFromURL(NSURL *url)
+{
+    RHSendInstallLog([NSString stringWithFormat:@"下载 RootHide Frida arm64e 包：%@", url.absoluteString]);
+    NSURLSessionDownloadTask *task = [[NSURLSession sharedSession] downloadTaskWithURL:url completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+        if (error || !location) {
+            RHSendInstallLog([NSString stringWithFormat:@"Frida 下载失败：%@", error.localizedDescription ?: @"未知错误"]);
+            RHSendInstallLog(@"RESULT: FAILED");
+            return;
+        }
+        if ([response isKindOfClass:[NSHTTPURLResponse class]] && [(NSHTTPURLResponse *)response statusCode] >= 400) {
+            RHSendInstallLog([NSString stringWithFormat:@"Frida 下载返回 HTTP %ld", (long)[(NSHTTPURLResponse *)response statusCode]]);
+            RHSendInstallLog(@"RESULT: FAILED");
+            return;
+        }
+
+        DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
+        __block int installResult = EIO;
+        __block BOOL copied = NO;
+        NSString *destination = JBROOT_PATH([NSString stringWithFormat:@"/tmp/frida-roothide-%@.deb", NSUUID.UUID.UUIDString]);
+        [environmentManager runAsRoot:^{
+            [environmentManager runUnsandboxed:^{
+                NSString *tmpDirectory = JBROOT_PATH(@"/tmp");
+                [[NSFileManager defaultManager] createDirectoryAtPath:tmpDirectory withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0755} error:nil];
+                NSError *copyError = nil;
+                copied = [[NSFileManager defaultManager] copyItemAtPath:location.path toPath:destination error:&copyError];
+                if (!copied) {
+                    RHSendInstallLog([NSString stringWithFormat:@"复制 Frida 包失败：%@", copyError.localizedDescription ?: @"未知错误"]);
+                } else {
+                    NSDictionary *fileAttributes = [[NSFileManager defaultManager] attributesOfItemAtPath:destination error:nil];
+                    unsigned long long fileSize = [[fileAttributes objectForKey:NSFileSize] unsignedLongLongValue];
+                    RHSendInstallLog([NSString stringWithFormat:@"已下载 %.1f MB，开始 dpkg 安装", (double)fileSize / (1024.0 * 1024.0)]);
+                    installResult = RHRunInstallCommand(@[JBROOT_PATH(@"/usr/bin/dpkg"), @"-i", destination]);
+                }
+                [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
+            }];
+        }];
+
+        __block BOOL packageInstalled = NO;
+        __block BOOL serverPresent = NO;
+        __block BOOL launchDaemonPresent = NO;
+        [environmentManager runAsRoot:^{
+            [environmentManager runUnsandboxed:^{
+                packageInstalled = RHStatusContainsInstalledPackage(@"re.frida.server", @"iphoneos-arm64e");
+                serverPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/sbin/frida-server")];
+                launchDaemonPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/Library/LaunchDaemons/re.frida.server.plist")];
+            }];
+        }];
+        if (copied && installResult == 0 && packageInstalled && serverPresent && launchDaemonPresent) {
+            RHSendInstallLog(@"检测通过：re.frida.server、frida-server 与 LaunchDaemon 均已安装");
+            RHSendInstallLog(@"RESULT: SUCCESS");
+        } else {
+            RHSendInstallLog([NSString stringWithFormat:@"检测失败：copied=%d exit=%d package=%d server=%d daemon=%d", copied, installResult, packageInstalled, serverPresent, launchDaemonPresent]);
+            RHSendInstallLog(@"RESULT: FAILED");
+        }
+    }];
+    [task resume];
 }
 
 @implementation DOSettingsController
@@ -436,6 +614,22 @@ static NSString *RHBuildPackageDiagnostic(void)
                     [diagnosticSpecifier setProperty:@"doc.text.magnifyingglass" forKey:@"image"];
                     [diagnosticSpecifier setProperty:@"exportRootHidePackageDiagnosticsPressed" forKey:@"action"];
                     [specifiers addObject:diagnosticSpecifier];
+
+                    PSSpecifier *fridaSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
+                    [fridaSpecifier setProperty:@"Button_Install_Frida" forKey:@"title"];
+                    [fridaSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
+                    [fridaSpecifier setProperty:buttonHeight forKey:@"height"];
+                    [fridaSpecifier setProperty:@"bolt.horizontal.circle" forKey:@"image"];
+                    [fridaSpecifier setProperty:@"installFridaPressed" forKey:@"action"];
+                    [specifiers addObject:fridaSpecifier];
+
+                    PSSpecifier *openSSHSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
+                    [openSSHSpecifier setProperty:@"Button_Install_OpenSSH" forKey:@"title"];
+                    [openSSHSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
+                    [openSSHSpecifier setProperty:buttonHeight forKey:@"height"];
+                    [openSSHSpecifier setProperty:@"lock.shield" forKey:@"image"];
+                    [openSSHSpecifier setProperty:@"installOpenSSHPressed" forKey:@"action"];
+                    [specifiers addObject:openSSHSpecifier];
 
                     PSSpecifier *addMountSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
                     [addMountSpecifier setProperty:@"Mount_Add_Title" forKey:@"title"];
@@ -777,6 +971,9 @@ static NSString *RHBuildPackageDiagnostic(void)
 
 - (void)exportRootHidePackageDiagnosticsPressed
 {
+    // Resolve the app container before entering the root/unsandboxed context.
+    // NSHomeDirectory() may refer to root's home after credentials are changed.
+    NSString *documentsPath = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     __block NSString *diagnostic = nil;
     DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
     [environmentManager runAsRoot:^{
@@ -789,7 +986,7 @@ static NSString *RHBuildPackageDiagnostic(void)
         diagnostic = @"Dopamine RootHide package diagnostic\nNo jailbreak root was available.\n";
     }
 
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/RootHide-package-diagnostic.txt"];
+    NSString *path = [documentsPath stringByAppendingPathComponent:@"RootHide-package-diagnostic.txt"];
     NSError *error = nil;
     if (![diagnostic writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Log_Error") message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
@@ -802,6 +999,40 @@ static NSString *RHBuildPackageDiagnostic(void)
     activity.popoverPresentationController.sourceView = self.view;
     activity.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds), 1, 1);
     [self presentViewController:activity animated:YES completion:nil];
+}
+
+- (void)pushRootHideInstallLogWithTitle:(NSString *)title operation:(void (^)(void))operation
+{
+    DOLogCrashViewController *logController = [[DOLogCrashViewController alloc] initWithTitle:title exitOnDisappear:NO];
+    [self.navigationController pushViewController:logController animated:YES];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), operation);
+}
+
+- (void)installOpenSSHPressed
+{
+    [self pushRootHideInstallLogWithTitle:DOLocalizedString(@"Button_Install_OpenSSH") operation:^{
+        RHSendInstallLog(@"开始安装 OpenSSH Server（RootHide 隔离环境）");
+        DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
+        [environmentManager runAsRoot:^{
+            [environmentManager runUnsandboxed:^{
+                RHInstallOpenSSH();
+            }];
+        }];
+    }];
+}
+
+- (void)installFridaPressed
+{
+    [self pushRootHideInstallLogWithTitle:DOLocalizedString(@"Button_Install_Frida") operation:^{
+        RHSendInstallLog(@"开始安装 Frida Server（RootHide arm64e 专用包）");
+        NSURL *url = [NSURL URLWithString:@"https://github.com/sl-ars/frida-ios-stealth/releases/download/v17.17.0/frida_17.17.0_iphoneos-arm64e-roothide.deb"];
+        if (!url) {
+            RHSendInstallLog(@"Frida 下载地址无效");
+            RHSendInstallLog(@"RESULT: FAILED");
+            return;
+        }
+        RHInstallFridaFromURL(url);
+    }];
 }
 
 - (void)changeMobilePasswordWithAuthenticationPressed
