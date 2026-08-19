@@ -116,7 +116,8 @@
         if (log) [self.pendingLogs addObject:log];
         return;
     }
-    _logView.text = [[_logView.text ?: @""] stringByAppendingFormat:@"%@\n", log ?: @""];
+    NSString *existingText = _logView.text ?: @"";
+    _logView.text = [existingText stringByAppendingFormat:@"%@\n", log ?: @""];
     [_logView scrollRangeToVisible:NSMakeRange(_logView.text.length, 0)];
 }
 
