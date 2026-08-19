@@ -777,7 +777,7 @@ static NSString *RHBuildPackageDiagnostic(void)
 
 - (void)exportRootHidePackageDiagnosticsPressed
 {
-    NSString *diagnostic = nil;
+    __block NSString *diagnostic = nil;
     DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
     [environmentManager runAsRoot:^{
         [environmentManager runUnsandboxed:^{
