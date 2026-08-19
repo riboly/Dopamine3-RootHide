@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BUILD_MODE: ${{ github.event.inputs.build_mode || 'focused' }}
+  BUILD_MODE: ${{ github.event.inputs.build_mode || 'full' }}
   THEOS: ${{ github.workspace }}/theos
   THEOS_COMMIT: 88506b2c22e9e07dd4ed055f23c9e398a117a2c7
   IOS_SDK_VERSION: "16.5"
