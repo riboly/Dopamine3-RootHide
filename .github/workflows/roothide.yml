@@ -151,7 +151,25 @@ jobs:
           set -euo pipefail
           export CLANG_MODULE_CACHE_PATH="$RUNNER_TEMP/clang-module-cache"
           mkdir -p "$CLANG_MODULE_CACHE_PATH"
-          make -j"$(sysctl -n hw.logicalcpu)" NIGHTLY=1
+          build_log="$RUNNER_TEMP/dopamine-build.log"
+          set +e
+          make -j"$(sysctl -n hw.logicalcpu)" NIGHTLY=1 2>&1 | tee "$build_log"
+          build_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$build_status" -ne 0 ]; then
+            {
+              echo "### Full build diagnostics"
+              echo
+              grep -E 'error:|fatal error:|make: \*\*\*|ld: error:' "$build_log" | tail -n 80 || true
+            } >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r line; do
+              escaped=${line//'%'/'%25'}
+              escaped=${escaped//$'\r'/'%0D'}
+              escaped=${escaped//$'\n'/'%0A'}
+              echo "::error title=Full build::$escaped"
+            done < <(grep -E 'error:|fatal error:|make: \*\*\*|ld: error:' "$build_log" | tail -n 20 || true)
+            exit "$build_status"
+          fi
 
           version="$(cat BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)"
           artifact="roothide-Dopamine-${version}.tipa"

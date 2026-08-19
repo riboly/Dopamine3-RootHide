@@ -997,6 +997,7 @@ int getCFMajorVersion(void)
     // source file and discard its cached indexes before the next refresh.
     NSString *obsoleteSource = [NSString stringWithFormat:@"https://github.com/roothide/roothide.github.io/releases/download/%d/", getCFMajorVersion()];
     NSArray *sourceDirectories = @[
+        jbrootPrefix(@"/etc/apt"),
         jbrootPrefix(@"/etc/apt/sources.list.d"),
         jbrootPrefix(@"/etc/apt/sileo.list.d"),
     ];
@@ -1018,7 +1019,10 @@ int getCFMajorVersion(void)
             // beside the RootHide arm64e source makes Sileo resolve packages
             // against apt.procurs.us, which produces the exact missing-folder
             // error reported by the user.
-            if ([name.lowercaseString containsString:@"procursus"] && [contents containsString:@"apt.procurs.us"]) {
+            // Do not rely on the filename: Sileo can create source files with
+            // arbitrary names, while the bootstrap's old URL is the stable
+            // identifier of the rootless source we need to remove.
+            if ([contents containsString:@"apt.procurs.us"]) {
                 [fm removeItemAtPath:path error:nil];
                 continue;
             }
