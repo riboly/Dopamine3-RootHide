@@ -120,7 +120,7 @@
                     return;
                 }
             }
-            [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"https://github.com/P013onEr/RootHide/releases"] options:@{} completionHandler:nil];
+            [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"https://github.com/riboly/Dopamine3-RootHide/releases"] options:@{} completionHandler:nil];
             return;
         }
 
@@ -138,7 +138,7 @@
         }
         else
         {
-            [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"https://github.com/P013onEr/RootHide/releases"] options:@{} completionHandler:nil];
+            [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"https://github.com/riboly/Dopamine3-RootHide/releases"] options:@{} completionHandler:nil];
         }
         
     }] chevron:NO];

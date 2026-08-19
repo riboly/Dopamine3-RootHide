@@ -32,6 +32,7 @@
 
 int reboot3(uint64_t flags, ...);
 CFPropertyListRef MGCopyAnswer(CFStringRef);
+extern char **environ;
 
 @implementation DOEnvironmentManager
 
@@ -288,7 +289,12 @@ CFPropertyListRef MGCopyAnswer(CFStringRef);
     if (![self isJailbroken]) {
         uint32_t csFlags = 0;
         csops(getpid(), CS_OPS_STATUS, &csFlags, sizeof(csFlags));
-        return csFlags & CS_PLATFORM_BINARY;
+
+        // Palera1n or another platformized environment.
+        if (csFlags & CS_PLATFORM_BINARY) return YES;
+
+        // Dopamine 2 and older do not expose the Dopamine 3 client state.
+        if (!access("/usr/lib/systemhook.dylib", F_OK)) return YES;
     }
     return NO;
 }
@@ -303,7 +309,7 @@ CFPropertyListRef MGCopyAnswer(CFStringRef);
             version = [NSString stringWithContentsOfFile:JBROOT_PATH(@"/basebin/.version") encoding:NSUTF8StringEncoding error:nil];
         }];
     }];
-    return [[version componentsSeparatedByString:@"."] lastObject];
+    return [version stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
 - (NSString *)systemVersion
@@ -353,6 +359,76 @@ CFPropertyListRef MGCopyAnswer(CFStringRef);
     if (ur == 0 && orgUser != 0) seteuid(orgUser);
 }
 
+- (int)spawnJbctlAsRootWithArgs:(NSArray<NSString *> *)args
+{
+    BOOL needsLegacySolution = NO;
+    NSString *jailbrokenVersion = self.jailbrokenVersion;
+    if (jailbrokenVersion.length) {
+        needsLegacySolution = [jailbrokenVersion compare:@"3.0.5" options:NSNumericSearch] == NSOrderedAscending;
+    }
+
+    char **argBuf = calloc(args.count + 4, sizeof(char *));
+    argBuf[0] = strdup(JBROOT_PATH("/basebin/jbctl"));
+    int i = 1;
+    for (NSString *arg in args) {
+        argBuf[i++] = strdup(arg.UTF8String);
+    }
+    if (!needsLegacySolution) {
+        argBuf[i++] = strdup("--waitfor");
+        argBuf[i++] = strdup("3");
+    }
+
+    posix_spawn_file_actions_t actions = NULL;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawnattr_t attributes = NULL;
+    posix_spawnattr_init(&attributes);
+
+    int waitPipe[2] = {-1, -1};
+    if (!needsLegacySolution) {
+        if (pipe(waitPipe) != 0) {
+            int pipeError = errno;
+            posix_spawnattr_destroy(&attributes);
+            posix_spawn_file_actions_destroy(&actions);
+            for (int y = 0; y < i; y++) free(argBuf[y]);
+            free(argBuf);
+            return pipeError;
+        }
+        posix_spawn_file_actions_adddup2(&actions, waitPipe[0], 3);
+    }
+    else {
+        posix_spawnattr_setflags(&attributes, POSIX_SPAWN_START_SUSPENDED);
+    }
+
+    __block pid_t pid = 0;
+    __block int spawnResult = -1;
+    [self runAsRoot:^{
+        [self runUnsandboxed:^{
+            spawnResult = posix_spawn(&pid, argBuf[0], &actions, &attributes, argBuf, environ);
+            if (spawnResult == 0 && needsLegacySolution) {
+                // Installed basebins older than 3.0.5 do not understand --waitfor.
+                kill(pid, SIGCONT);
+            }
+        }];
+        // On iOS 17+, restore credentials and the sandbox before jbctl acts.
+    }];
+
+    posix_spawnattr_destroy(&attributes);
+    posix_spawn_file_actions_destroy(&actions);
+    for (int y = 0; y < i; y++) free(argBuf[y]);
+    free(argBuf);
+
+    if (!needsLegacySolution) {
+        if (spawnResult == 0) {
+            char resumeByte = 'w';
+            write(waitPipe[1], &resumeByte, sizeof(resumeByte));
+        }
+        close(waitPipe[0]);
+        close(waitPipe[1]);
+    }
+
+    return spawnResult == 0 ? cmd_wait_for_exit(pid) : spawnResult;
+}
+
 - (int)runTrollStoreAction:(NSString *)action
 {
     if (![self isInstalledThroughTrollStore]) return -1;
@@ -365,47 +441,12 @@ CFPropertyListRef MGCopyAnswer(CFStringRef);
 
 - (void)respring
 {
-    [self runAsRoot:^{
-        __block int pid = 0;
-        __block int r = 0;
-        [self runUnsandboxed:^{
-            r = exec_cmd_suspended(&pid, JBROOT_PATH("/usr/bin/sbreload"), NULL);
-            if (r == 0) {
-                kill(pid, SIGCONT);
-            }
-        }];
-        if (r == 0) {
-            if (cmd_wait_for_exit(pid) != 0) {
-                // Fallback
-                [self runUnsandboxed:^{
-                    killall("/usr/libexec/backboardd", SIGTERM);
-                }];
-            }
-        }
-    }];
+    [self spawnJbctlAsRootWithArgs:@[@"respring"]];
 }
 
 - (void)rebootUserspace
 {
-    [self runAsRoot:^{
-        __block int pid = 0;
-        __block int r = 0;
-        [self runUnsandboxed:^{
-            r = exec_cmd_suspended(&pid, JBROOT_PATH("/basebin/jbctl"), "reboot_userspace", NULL);
-            if (r == 0) {
-                // the original plan was to have the process continue outside of this block
-                // unfortunately sandbox blocks kill aswell, so it's a bit racy but works
-
-                // we assume we leave this unsandbox block before the userspace reboot starts
-                // to avoid leaking the label, this seems to work in practice
-                // and even if it doesn't work, leaking the label is no big deal
-                kill(pid, SIGCONT);
-            }
-        }];
-        if (r == 0) {
-            cmd_wait_for_exit(pid);
-        }
-    }];
+    [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];
 }
 
 - (void)refreshJailbreakApps
@@ -465,14 +506,7 @@ CFPropertyListRef MGCopyAnswer(CFStringRef);
 
 - (void)updateJailbreakFromTIPA:(NSString *)tipaPath
 {
-    [self runAsRoot:^{
-        [self runUnsandboxed:^{
-            pid_t pid = 0;
-            if (exec_cmd_suspended(&pid, JBROOT_PATH("/basebin/jbctl"), "update", "tipa", tipaPath.fileSystemRepresentation, NULL) == 0) {
-                kill(pid, SIGCONT);
-            }
-        }];
-    }];
+    [self spawnJbctlAsRootWithArgs:@[@"update", @"tipa", tipaPath]];
 }
 
 - (BOOL)isTweakInjectionEnabled

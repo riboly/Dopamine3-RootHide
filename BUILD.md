@@ -1,32 +1,19 @@
+# GitHub Actions build
 
-# How To Build Your Own tipa on github action
+The RootHide workflow is `.github/workflows/roothide.yml`.
 
-fork this repo then goto tab [Actions] -> [All Workflows] -> [build tip file] -> [Run Workflow] to build tipa file.
+1. Open the repository's **Actions** tab.
+2. Select **Build roothide Dopamine**.
+3. Choose **Run workflow** on the `roothide-3.x` branch.
+4. Select `focused` to compile only `systemhook.dylib`, or `full` to build the
+   installable TIPA.
+5. Download the artifact after the job finishes. GitHub wraps artifacts in a
+   ZIP; the full-build ZIP contains `roothide-Dopamine-<version>-<commit>.tipa`.
 
-- step 1: Login your github account and fork this project
+The workflow checks out submodules, applies the versioned RootHide patches,
+uses Xcode 15.4 and the RootHide Theos toolchain, and builds without requiring
+a local Mac.
 
-![text](/.pictures/m1.png)
-![text](/.pictures/m2.png)
-
-
-- step 2: Goto the github Actions tab of your forked project and run workflow to build tip file
-
-![text](/.pictures/m3.png)
-![text](/.pictures/m4.png)
-
-
-- step 3: Refresh the page and you will see the progress of the build, wait a few minutes
-
-![text](/.pictures/m5.png)
-
-
-- step 4: when the build is complete, go to the bottom of the build page to download the tipa file.
-  
-  (***NOTE: The downloaded file is in zip format, you need to unzip it on your device to get the tipa file***)
-
-![text](/.pictures/m6.png)
-
-
-***and you will get the contributor with your name on Credits***
-
-![text](/.pictures/m7.png)
+A green full build verifies compilation and packaging only. Record the commit,
+workflow run URL, artifact SHA-256, and a separate device-test result before
+calling a release stable.

@@ -1,8 +1,8 @@
 diff --git a/src/common.c b/src/common.c
-index 63b320b..73fce4a 100644
+index 17ee110..ce1ceac 100644
 --- a/src/common.c
 +++ b/src/common.c
-@@ -1562,8 +1562,113 @@ static uint64_t xpf_find_task_security_config(void)
+@@ -1598,8 +1598,113 @@ static uint64_t xpf_find_task_security_config(void)
  	return imm;
  }
  
@@ -117,7 +117,7 @@ index 63b320b..73fce4a 100644
  	xpf_item_register("kernelConstant.kernel_el", xpf_find_kernel_el, NULL);
  	if (!gXPF.sptm) {
 diff --git a/src/xpf.c b/src/xpf.c
-index ea860b0..ae20900 100644
+index ea860b0..2d2d659 100644
 --- a/src/xpf.c
 +++ b/src/xpf.c
 @@ -399,7 +399,29 @@ XPFSet gIOSurfaceSet = {
@@ -166,13 +166,6 @@ index ea860b0..ae20900 100644
  		gXPF.kernelPrelinkTextSection = xpf_pfsec_init(NULL, "__PRELINK_TEXT", "__text");
  		gXPF.kernelPLKTextSection = xpf_pfsec_init(NULL, "__PLK_TEXT_EXEC", "__text");
  		gXPF.kernelKmodInfoSection = xpf_pfsec_init(NULL, "__PRELINK_INFO", "__kmod_info");
-@@ -880,4 +904,4 @@ void xpf_stop(void)
- 	}
- 	
- 	gXPF = (struct s_XPF){ 0 };
--}
-\ No newline at end of file
-+}
 diff --git a/src/xpf.h b/src/xpf.h
 index 1027622..9c12a94 100644
 --- a/src/xpf.h

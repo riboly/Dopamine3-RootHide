@@ -10,17 +10,19 @@ remove incompatible tweaks if SpringBoard enters a respring loop.
 ## Downloads and changelog
 
 Download signed builds and read the changelog on the
-[GitHub Releases](https://github.com/P013onEr/RootHide/releases) page. The
+[GitHub Releases](https://github.com/riboly/Dopamine3-RootHide/releases) page. The
 in-app update screen reads release notes from the same location.
 
-## Tested configuration
+## Target configuration
 
-- iPhone 14 Pro Max (iPhone15,3)
-- iOS 16.6
-- Dopamine 3.0.4 base
+- iPhone XS Max (iPhone11,6, A12)
+- iOS 18.2.1 (22C161)
+- Dopamine 3.0.7 base
 
-Other devices and versions supported by Dopamine 3 may work, but should be
-treated as unverified until they have been tested with this RootHide port.
+The RootHide behavior carried by this branch has a device-verified historical
+baseline, but builds from this repository remain unverified until each commit
+has completed a fresh device test. A successful GitHub Actions build only
+establishes that the source compiles and packages correctly.
 
 ## Community
 
@@ -31,6 +33,10 @@ treated as unverified until they have been tested with this RootHide port.
 
 See [BUILD.md](BUILD.md) for GitHub Actions instructions. The workflow used by
 this repository is available at [.github/workflows/roothide.yml](.github/workflows/roothide.yml).
+
+The `3.x` branch tracks opa334's upstream. RootHide releases are developed on
+`roothide-3.x`: update `3.x` from upstream first, then rebase or replay the
+RootHide-only commits and rerun both focused and full Actions builds.
 
 ## Credits
 
