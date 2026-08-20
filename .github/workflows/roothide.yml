@@ -133,6 +133,19 @@ jobs:
           grep -F 'extern const char *HOOK_DYLIB_PATH;' \
             BaseBin/systemhook/src/common/common.h
 
+      - name: Verify RootHide Procursus keyring
+        run: |
+          set -euo pipefail
+          keyring="BaseBin/_external/basebin/roothide-procursus.gpg"
+          expected_sha256="62150c414b801f63e06511d7055c7629ba8f25cfc89dd64f2550bfdac5353eab"
+          test "$(shasum -a 256 "$keyring" | awk '{print $1}')" = "$expected_sha256"
+
+          archived_keyring="$RUNNER_TEMP/roothide-procursus.gpg"
+          bsdtar="$(brew --prefix libarchive)/bin/bsdtar"
+          "$bsdtar" -xOf Application/Dopamine/Resources/bootstrap_1900.tar.zst \
+            ./etc/apt/trusted.gpg.d/roothide-procursus.gpg > "$archived_keyring"
+          cmp "$keyring" "$archived_keyring"
+
       - name: Focused build systemhook
         if: env.BUILD_MODE == 'focused'
         run: |

@@ -170,6 +170,7 @@ static NSString *RHBuildPackageDiagnostic(void)
         @"/var/mobile/Library/Logs/Sileo.log",
         @"/var/mobile/Library/Logs/SileoStore.log",
         @"/etc/apt/trusted.gpg.d/memo.gpg",
+        @"/etc/apt/trusted.gpg.d/roothide-procursus.gpg",
         @"/etc/apt/trusted.gpg.d/procursus-keyring.list",
     ];
     for (NSString *relativePath in pathSnapshots) {

@@ -8,7 +8,9 @@
 #import <dlfcn.h>
 #import <spawn.h>
 #import <pthread.h>
+#import <sys/stat.h>
 #import <sys/sysctl.h>
+#import <unistd.h>
 #import <substrate.h>
 
 #import "spawn_hook.h"
@@ -59,6 +61,39 @@ void draw_boot_logo(const char *bootLogoPath)
 	}
 }
 
+static void ensure_procursus_keyring(void)
+{
+	@autoreleasepool {
+		NSString *sourcePath = JBROOT_PATH(@"/basebin/roothide-procursus.gpg");
+		NSString *targetPath = JBROOT_PATH(@"/etc/apt/trusted.gpg.d/roothide-procursus.gpg");
+		NSData *keyringData = [NSData dataWithContentsOfFile:sourcePath];
+		if (keyringData.length == 0) return;
+
+		NSFileManager *fileManager = [NSFileManager defaultManager];
+		NSString *targetDirectory = targetPath.stringByDeletingLastPathComponent;
+		NSDictionary *directoryAttributes = @{
+			NSFilePosixPermissions : @0755,
+			NSFileOwnerAccountID : @0,
+			NSFileGroupOwnerAccountID : @0,
+		};
+		if (![fileManager createDirectoryAtPath:targetDirectory
+					 withIntermediateDirectories:YES
+								  attributes:directoryAttributes
+									   error:nil]) {
+			return;
+		}
+
+		NSData *installedData = [NSData dataWithContentsOfFile:targetPath];
+		if (![installedData isEqualToData:keyringData] &&
+			![keyringData writeToFile:targetPath options:NSDataWritingAtomic error:nil]) {
+			return;
+		}
+
+		chown(targetPath.fileSystemRepresentation, 0, 0);
+		chmod(targetPath.fileSystemRepresentation, 0644);
+	}
+}
+
 int (*sysctlbyname_orig)(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) = NULL;
 int sysctlbyname_hook(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 {
@@ -97,6 +132,7 @@ __attribute__((constructor)) static void initializer(void)
 			gSystemInfo.jailbreakInfo.rootPath = strdup(selfPath.stringByDeletingLastPathComponent.stringByDeletingLastPathComponent.fileSystemRepresentation);
 		}
 	}
+	ensure_procursus_keyring();
 
 	// If we performed a jbupdate before the userspace reboot, these vars will be set
 	// In that case, we want to run finalizers
