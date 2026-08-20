@@ -32,6 +32,14 @@
 
 extern char **environ;
 
+#ifndef POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE
+#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
+#endif
+
+extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict, uid_t, uint32_t);
+extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *__restrict, uid_t);
+extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *__restrict, uid_t);
+
 @interface DOSettingsController ()
 
 @end
@@ -96,6 +104,18 @@ static void RHAppendDiagnosticText(NSMutableString *output, NSString *root, NSSt
     }
 }
 
+static void RHAppendDiagnosticAbsoluteStat(NSMutableString *output, NSString *path, NSString *label)
+{
+    struct stat st = {0};
+    if (lstat(path.fileSystemRepresentation, &st) != 0) {
+        [output appendFormat:@"PATH %@\n  missing errno=%d (%s)\n", label, errno, strerror(errno)];
+        return;
+    }
+
+    [output appendFormat:@"PATH %@\n  mode=%o uid=%d gid=%d size=%lld\n",
+        label, st.st_mode & 07777, st.st_uid, st.st_gid, (long long)st.st_size];
+}
+
 static NSString *RHBuildPackageDiagnostic(void)
 {
     NSMutableString *output = [NSMutableString stringWithString:@"Dopamine RootHide package diagnostic\n"];
@@ -108,22 +128,30 @@ static NSString *RHBuildPackageDiagnostic(void)
     if (!root.length) return output;
 
     NSArray<NSString *> *pathSnapshots = @[
-        @"/var/jb",
+        @"/.installed_dopamine",
+        @"/.jbroot",
+        @"/basebin/jbctl",
+        @"/basebin/.version",
         @"/etc/apt/sources.list.d",
         @"/etc/apt/sileo.list.d",
         @"/var/lib/apt",
         @"/var/lib/apt/lists",
         @"/var/lib/apt/sileolists",
         @"/var/lib/dpkg/status",
+        @"/var/lib/dpkg/lock",
+        @"/var/lib/dpkg/lock-frontend",
         @"/usr/sbin/sshd",
         @"/usr/sbin/frida-server",
         @"/Library/LaunchDaemons/re.frida.server.plist",
         @"/var/mobile/Library/Logs/Sileo.log",
         @"/var/mobile/Library/Logs/SileoStore.log",
+        @"/etc/apt/trusted.gpg.d/memo.gpg",
+        @"/etc/apt/trusted.gpg.d/procursus-keyring.list",
     ];
     for (NSString *relativePath in pathSnapshots) {
         RHAppendDiagnosticStat(output, root, relativePath);
     }
+    RHAppendDiagnosticAbsoluteStat(output, @"/Applications/RootHide.app/RootHide", @"/Applications/RootHide.app/RootHide (system)");
 
     NSArray<NSString *> *textSnapshots = @[
         @"/etc/apt/sources.list.d/default.sources",
@@ -180,8 +208,18 @@ static int RHRunInstallCommand(NSArray<NSString *> *arguments)
     posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDERR_FILENO);
     posix_spawn_file_actions_addclose(&actions, outputPipe[0]);
 
+    // RootHide does not guarantee that the Dopamine app can change its own
+    // uid/euid. Spawn through libjailbreak's RootHide-aware path with the
+    // root persona so dpkg/apt really execute as uid 0.
+    posix_spawnattr_t attributes = NULL;
+    posix_spawnattr_init(&attributes);
+    posix_spawnattr_set_persona_np(&attributes, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
+    posix_spawnattr_set_persona_uid_np(&attributes, 0);
+    posix_spawnattr_set_persona_gid_np(&attributes, 0);
+
     pid_t pid = 0;
-    int spawnResult = posix_spawn(&pid, argv[0], &actions, NULL, argv, environ);
+    int spawnResult = exec_cmd_roothide_spawn(&pid, argv[0], &actions, &attributes, argv, environ);
+    posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
     close(outputPipe[1]);
     for (NSUInteger i = 0; i < arguments.count; i++) free(argv[i]);
@@ -189,6 +227,7 @@ static int RHRunInstallCommand(NSArray<NSString *> *arguments)
 
     if (spawnResult != 0) {
         close(outputPipe[0]);
+        RHSendInstallLog([NSString stringWithFormat:@"RootHide spawn 失败：%d (%s)", spawnResult, strerror(spawnResult)]);
         return spawnResult;
     }
 
@@ -233,6 +272,30 @@ static BOOL RHStatusContainsInstalledPackage(NSString *packageName, NSString *ar
     return NO;
 }
 
+static int RHProcursusSuiteVersion(void)
+{
+    if (@available(iOS 16.0, *)) return 1900;
+    return 1800;
+}
+
+static NSString *RHWriteIsolatedProcursusSources(void)
+{
+    NSString *sourcePath = JBROOT_PATH(@"/tmp/dopamine-roothide-install.sources");
+    NSString *contents = [NSString stringWithFormat:
+        @"Types: deb\n"
+        @"URIs: https://roothide.github.io/procursus\n"
+        @"Suites: iphoneos-arm64e/%d\n"
+        @"Components: main\n", RHProcursusSuiteVersion()];
+    NSError *error = nil;
+    if (![contents writeToFile:sourcePath atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
+        RHSendInstallLog([NSString stringWithFormat:@"写入隔离 RootHide 源失败：%@", error.localizedDescription ?: @"未知错误"]);
+        return nil;
+    }
+    chmod(sourcePath.fileSystemRepresentation, 0644);
+    chown(sourcePath.fileSystemRepresentation, 0, 0);
+    return sourcePath;
+}
+
 static void RHInstallOpenSSH(void)
 {
     NSString *apt = JBROOT_PATH(@"/usr/bin/apt-get");
@@ -241,16 +304,41 @@ static void RHInstallOpenSSH(void)
         return;
     }
 
-    RHSendInstallLog(@"使用 RootHide arm64e Procursus 源更新软件包索引");
-    int result = RHRunInstallCommand(@[apt, @"update"]);
-    if (result != 0) {
-        RHSendInstallLog([NSString stringWithFormat:@"apt-get update 失败，退出码 %d", result]);
+    NSString *sourcePath = RHWriteIsolatedProcursusSources();
+    if (!sourcePath.length) {
         RHSendInstallLog(@"RESULT: FAILED");
         return;
     }
 
+    NSString *trustedParts = JBROOT_PATH(@"/etc/apt/trusted.gpg.d");
+    NSString *memoKey = JBROOT_PATH(@"/etc/apt/trusted.gpg.d/memo.gpg");
+    if (![[NSFileManager defaultManager] fileExistsAtPath:memoKey]) {
+        RHSendInstallLog(@"RootHide Procursus keyring 缺失：etc/apt/trusted.gpg.d/memo.gpg");
+    }
+
+    NSArray<NSString *> *isolatedAptOptions = @[
+        @"-o", [NSString stringWithFormat:@"Dir::Etc::sourcelist=%@", sourcePath],
+        @"-o", @"Dir::Etc::sourceparts=-",
+        @"-o", [NSString stringWithFormat:@"Dir::Etc::trustedparts=%@", trustedParts],
+        @"-o", @"Dir::Etc::trustedlist=-",
+    ];
+
+    RHSendInstallLog(@"使用隔离的 RootHide arm64e Procursus 源更新软件包索引");
+    NSMutableArray<NSString *> *updateArguments = [NSMutableArray arrayWithObjects:apt, @"update", nil];
+    [updateArguments addObjectsFromArray:isolatedAptOptions];
+    int result = RHRunInstallCommand(updateArguments);
+    if (result != 0) {
+        RHSendInstallLog([NSString stringWithFormat:@"apt-get update 失败，退出码 %d", result]);
+        RHSendInstallLog(@"RESULT: FAILED");
+        [[NSFileManager defaultManager] removeItemAtPath:sourcePath error:nil];
+        return;
+    }
+
     RHSendInstallLog(@"安装 openssh-server (RootHide/iphoneos-arm64e)");
-    result = RHRunInstallCommand(@[apt, @"install", @"-y", @"openssh-server"]);
+    NSMutableArray<NSString *> *installArguments = [NSMutableArray arrayWithObjects:apt, @"install", @"-y", @"openssh-server", nil];
+    [installArguments addObjectsFromArray:isolatedAptOptions];
+    result = RHRunInstallCommand(installArguments);
+    [[NSFileManager defaultManager] removeItemAtPath:sourcePath error:nil];
     BOOL packageInstalled = RHStatusContainsInstalledPackage(@"openssh-server", @"iphoneos-arm64e");
     BOOL daemonPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/sbin/sshd")] ||
         [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/bin/sshd")];

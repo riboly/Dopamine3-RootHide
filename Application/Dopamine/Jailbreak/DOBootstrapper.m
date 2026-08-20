@@ -615,9 +615,10 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
         return exec_cmd_trusted(JBROOT_PATH("/usr/bin/dpkg"), "-i", packagePath.fileSystemRepresentation, NULL);
     }
     else {
-        // idk why but waitpid sometimes fails and this returns -1, so we just ignore the return value
-        exec_cmd(JBROOT_PATH("/basebin/jbctl"), "internal", "install_pkg", packagePath.fileSystemRepresentation, NULL);
-        return 0;
+        // RootHide may leave the Dopamine process as mobile even after the
+        // jailbreak succeeds. Use libjailbreak's root persona for jbctl so
+        // its dpkg child can create root-owned package state and run scripts.
+        return exec_cmd_root(JBROOT_PATH("/basebin/jbctl"), "internal", "install_pkg", packagePath.fileSystemRepresentation, NULL);
     }
 }
 
@@ -658,6 +659,25 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
         }
     }
     return nil;
+}
+
+- (void)repairRootHideManagerHelper
+{
+    NSString *helper = @"/Applications/RootHide.app/RootHide";
+    struct stat st = {0};
+    if (lstat(helper.fileSystemRepresentation, &st) != 0) {
+        [[DOUIManager sharedInstance] sendLog:[NSString stringWithFormat:@"RootHide helper 缺失：%@ (errno=%d)", helper, errno] debug:NO];
+        return;
+    }
+
+    BOOL isSUIDRoot = st.st_uid == 0 && st.st_gid == 0 && (st.st_mode & 04755) == 04755;
+    if (!isSUIDRoot) {
+        [[DOUIManager sharedInstance] sendLog:[NSString stringWithFormat:@"修复 RootHide helper 权限：mode=%o uid=%d gid=%d", st.st_mode & 07777, st.st_uid, st.st_gid] debug:NO];
+        int chownResult = exec_cmd_root(JBROOT_PATH("/usr/bin/chown"), "0:0", helper.fileSystemRepresentation, NULL);
+        int chmodResult = exec_cmd_root(JBROOT_PATH("/usr/bin/chmod"), "4755", helper.fileSystemRepresentation, NULL);
+        lstat(helper.fileSystemRepresentation, &st);
+        [[DOUIManager sharedInstance] sendLog:[NSString stringWithFormat:@"RootHide helper 修复结果：chown=%d chmod=%d mode=%o uid=%d gid=%d", chownResult, chmodResult, st.st_mode & 07777, st.st_uid, st.st_gid] debug:NO];
+    }
 }
 
 - (BOOL)shouldInstallPackage:(NSString *)identifier
@@ -903,15 +923,6 @@ URIs: http://apt.thebigboss.org/repofiles/cydia/\n\
 Suites: stable\n\
 Components: main\n\
 \n\
-Types: deb\n\
-URIs: https://roothide.github.io/\n\
-Suites: ./\n\
-Components:\n\
-\n\
-Types: deb\n\
-URIs: https://roothide.github.io/procursus\n\
-Suites: iphoneos-arm64e/%d\n\
-Components: main\n\
 "
 
 // #define ALT_SOURCES "\
@@ -932,7 +943,6 @@ deb https://getzbra.com/repo/ ./\n\
 deb https://repo.chariz.com/ ./\n\
 deb https://yourepo.com/ ./\n\
 deb https://havoc.app/ ./\n\
-deb https://roothide.github.io/ ./\n\
 deb https://roothide.github.io/procursus iphoneos-arm64e/%d main\n\
 \n\
 "
@@ -1039,24 +1049,29 @@ int getCFMajorVersion(void)
                 [fm removeItemAtPath:path error:nil];
                 continue;
             }
-            if (![contents containsString:obsoleteSource]) continue;
-
             NSMutableArray *kept = [NSMutableArray array];
             BOOL isDeb822 = [path.pathExtension isEqualToString:@"sources"];
+            BOOL changed = NO;
             if (isDeb822) {
                 for (NSString *stanza in [contents componentsSeparatedByString:@"\n\n"]) {
-                    if (![stanza containsString:obsoleteSource] && stanza.length > 0) {
-                        [kept addObject:stanza];
-                    }
+                    if (stanza.length == 0) continue;
+                    BOOL isObsoleteRelease = [stanza containsString:obsoleteSource];
+                    BOOL isUnsignedRoot = [stanza containsString:@"https://roothide.github.io/"] &&
+                        ![stanza containsString:@"https://roothide.github.io/procursus"];
+                    if (isObsoleteRelease || isUnsignedRoot) changed = YES;
+                    else [kept addObject:stanza];
                 }
             } else {
                 for (NSString *line in [contents componentsSeparatedByString:@"\n"]) {
-                    if (![line containsString:obsoleteSource]) {
-                        [kept addObject:line];
-                    }
+                    BOOL isObsoleteRelease = [line containsString:obsoleteSource];
+                    BOOL isUnsignedRoot = [line containsString:@"https://roothide.github.io/"] &&
+                        ![line containsString:@"https://roothide.github.io/procursus"];
+                    if (isObsoleteRelease || isUnsignedRoot) changed = YES;
+                    else [kept addObject:line];
                 }
             }
 
+            if (!changed) continue;
             NSString *cleaned = [kept componentsJoinedByString:isDeb822 ? @"\n\n" : @"\n"];
             if (cleaned.length == 0 || [cleaned stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length == 0) {
                 [fm removeItemAtPath:path error:nil];
@@ -1073,7 +1088,8 @@ int getCFMajorVersion(void)
     ];
     for (NSString *directory in cacheDirectories) {
         for (NSString *name in [fm contentsOfDirectoryAtPath:directory error:nil]) {
-            if ([name hasPrefix:obsoleteCachePrefix] || [name hasPrefix:@"apt.procurs.us_"]) {
+            if ([name hasPrefix:obsoleteCachePrefix] || [name hasPrefix:@"apt.procurs.us_"] ||
+                [name hasPrefix:@"roothide.github.io_"]) {
                 [fm removeItemAtPath:[directory stringByAppendingPathComponent:name] error:nil];
             }
         }
@@ -1499,6 +1515,13 @@ int getCFMajorVersion(void)
             return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedFinalising userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"updatelinks.sh returned %d\n", r]}];
         }
     }
+
+    DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
+    [environmentManager runAsRoot:^{
+        [environmentManager runUnsandboxed:^{
+            [self repairRootHideManagerHelper];
+        }];
+    }];
     
     BOOL shouldInstallLibkrw = [self shouldInstallPackage:@"libkrw0-dopamine"];
     BOOL shouldInstallBasebinLink = [self shouldInstallPackage:@"dopamine-basebin-link"];
