@@ -825,10 +825,14 @@ static void proc_copy_ucred(uint64_t procCopyFrom, uint64_t procCopyTo)
 // Build a credential-bearing helper process and copy its ucred onto the
 // suspended target. Direct ucred field writes are rejected or unstable on
 // newer iOS releases, so this follows the upstream Dopamine workaround.
-static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX])
+static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX], const char **failureStageOut)
 {
+	if (failureStageOut) *failureStageOut = NULL;
 	int comPipe[2] = {-1, -1};
-	if (pipe(comPipe) != 0) return -errno;
+	if (pipe(comPipe) != 0) {
+		if (failureStageOut) *failureStageOut = "donor-pipe";
+		return -errno;
+	}
 
 	posix_spawn_file_actions_t actions = NULL;
 	int result = posix_spawn_file_actions_init(&actions);
@@ -839,6 +843,7 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 		if (actions) posix_spawn_file_actions_destroy(&actions);
 		close(comPipe[0]);
 		close(comPipe[1]);
+		if (failureStageOut) *failureStageOut = "donor-file-actions";
 		return -result;
 	}
 
@@ -882,6 +887,7 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 	close(comPipe[1]);
 	if (result != 0) {
 		close(comPipe[0]);
+		if (failureStageOut) *failureStageOut = "donor-spawn";
 		return -result;
 	}
 
@@ -900,6 +906,10 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 	if (result <= 0 || readyLength != sizeof(ready) || ready != 0x42) {
 		int helperError = result == 0 ? ETIMEDOUT : EPROTO;
 		if (result < 0) helperError = errno;
+		if (failureStageOut) {
+			*failureStageOut = result == 0 ? "donor-handshake-timeout" :
+				(result < 0 ? "donor-handshake-poll" : "donor-handshake-protocol");
+		}
 		close(comPipe[0]);
 		kill(childPid, SIGKILL);
 		cmd_wait_for_exit(childPid);
@@ -909,17 +919,19 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 	return childPid;
 }
 
-int proc_ucred_update_content(uint64_t proc, const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX])
+int proc_ucred_update_content_with_stage(uint64_t proc, const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX], const char **failureStageOut)
 {
+	if (failureStageOut) *failureStageOut = NULL;
 	if (__builtin_available(iOS 17.0, *)) {
-		int childPid = target_proc_with_ucred(procPath, uid, gid, ruid, rgid, groups);
+		int childPid = target_proc_with_ucred(procPath, uid, gid, ruid, rgid, groups, failureStageOut);
 		if (childPid < 0) return -childPid;
 
 		uint64_t childProc = proc_find(childPid);
 		if (!childProc) {
+			if (failureStageOut) *failureStageOut = "donor-proc-find";
 			kill(childPid, SIGKILL);
 			cmd_wait_for_exit(childPid);
-			return -1;
+			return ESRCH;
 		}
 		proc_copy_ucred(childProc, proc);
 		proc_rele(childProc);
@@ -945,6 +957,11 @@ int proc_ucred_update_content(uint64_t proc, const char *procPath, uid_t uid, gi
 		}
 	}
 	return 0;
+}
+
+int proc_ucred_update_content(uint64_t proc, const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX])
+{
+	return proc_ucred_update_content_with_stage(proc, procPath, uid, gid, ruid, rgid, groups, NULL);
 }
 
 void killall(const char *executablePath, int signal)

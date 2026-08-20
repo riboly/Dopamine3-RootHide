@@ -277,8 +277,9 @@ double jbclient_jbsettings_get_double(const char *key)
 	return 0;
 }
 
-int jbclient_persona_fix(int childPid, uid_t overwriteUid, gid_t overwriteGid)
+int jbclient_persona_fix_with_stage(int childPid, uid_t overwriteUid, gid_t overwriteGid, char **failureStageOut)
 {
+	if (failureStageOut) *failureStageOut = NULL;
 	xpc_object_t xargs = xpc_dictionary_create_empty();
 	xpc_dictionary_set_uint64(xargs, "child-pid", (uint64_t)childPid);
 	xpc_dictionary_set_uint64(xargs, "overwrite-uid", (uint64_t)overwriteUid);
@@ -287,10 +288,18 @@ int jbclient_persona_fix(int childPid, uid_t overwriteUid, gid_t overwriteGid)
 	xpc_release(xargs);
 	if (xreply) {
 		int result = (int)xpc_dictionary_get_int64(xreply, "result");
+		const char *failureStage = xpc_dictionary_get_string(xreply, "failure-stage");
+		if (failureStageOut && failureStage) *failureStageOut = strdup(failureStage);
 		xpc_release(xreply);
 		return result;
 	}
+	if (failureStageOut) *failureStageOut = strdup("persona-xpc-no-reply");
 	return ENOTSUP;
+}
+
+int jbclient_persona_fix(int childPid, uid_t overwriteUid, gid_t overwriteGid)
+{
+	return jbclient_persona_fix_with_stage(childPid, overwriteUid, overwriteGid, NULL);
 }
 
 int jbclient_get_runtime_build(char **buildOut)

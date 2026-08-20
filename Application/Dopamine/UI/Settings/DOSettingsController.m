@@ -62,6 +62,16 @@ static void RHAppendDiagnosticStat(NSMutableString *output, NSString *root, NSSt
     [output appendFormat:@"PATH %@\n  mode=%o uid=%d gid=%d size=%lld\n",
         relativePath, st.st_mode & 07777, st.st_uid, st.st_gid, (long long)st.st_size];
 
+    errno = 0;
+    int readResult = access(path.fileSystemRepresentation, R_OK);
+    int readError = readResult == 0 ? 0 : errno;
+    errno = 0;
+    int executeResult = access(path.fileSystemRepresentation, X_OK);
+    int executeError = executeResult == 0 ? 0 : errno;
+    [output appendFormat:@"  access_read=%d errno=%d (%s) access_execute=%d errno=%d (%s)\n",
+        readResult, readError, readError == 0 ? "ok" : strerror(readError),
+        executeResult, executeError, executeError == 0 ? "ok" : strerror(executeError)];
+
     if (S_ISLNK(st.st_mode)) {
         char link[PATH_MAX + 1] = {0};
         ssize_t length = readlink(path.fileSystemRepresentation, link, PATH_MAX);
@@ -140,6 +150,7 @@ static NSString *RHBuildPackageDiagnostic(void)
         @"/.installed_dopamine",
         @"/.jbroot",
         @"/basebin/jbctl",
+        @"/basebin",
         @"/basebin/.version",
         @"/basebin/.build",
         @"/basebin/launchdhook.dylib",
@@ -150,8 +161,19 @@ static NSString *RHBuildPackageDiagnostic(void)
         @"/var/lib/apt/lists",
         @"/var/lib/apt/sileolists",
         @"/var/lib/dpkg/status",
+        @"/var/lib/dpkg",
         @"/var/lib/dpkg/lock",
         @"/var/lib/dpkg/lock-frontend",
+        @"/Library/dpkg/status",
+        @"/Library/dpkg/info/apt.list",
+        @"/usr/bin/apt-get",
+        @"/usr/bin/apt",
+        @"/usr/bin/dpkg",
+        @"/usr/bin/dpkg-deb",
+        @"/usr/lib/libapt-pkg.6.0.dylib",
+        @"/bin/sh",
+        @"/usr/bin/sh",
+        @"/prep_bootstrap.sh",
         @"/usr/sbin/sshd",
         @"/usr/sbin/frida-server",
         @"/Library/LaunchDaemons/re.frida.server.plist",
@@ -232,7 +254,8 @@ static int RHRunInstallCommand(NSArray<NSString *> *arguments)
     posix_spawnattr_set_persona_gid_np(&attributes, 0);
 
     pid_t pid = 0;
-    int spawnResult = exec_cmd_roothide_spawn_root(&pid, argv[0], &actions, &attributes, argv, environ);
+    char *failureStage = NULL;
+    int spawnResult = exec_cmd_roothide_spawn_root_diagnostic(&pid, argv[0], &actions, &attributes, argv, environ, &failureStage);
     posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
     close(outputPipe[1]);
@@ -243,12 +266,14 @@ static int RHRunInstallCommand(NSArray<NSString *> *arguments)
         close(outputPipe[0]);
         char *runtimeBuild = NULL;
         int runtimeBuildResult = jbclient_get_runtime_build(&runtimeBuild);
-        RHSendInstallLog([NSString stringWithFormat:@"RootHide spawn 失败：%d (%s)，运行中 basebin=%s，探测=%d (%s)",
-            spawnResult, strerror(spawnResult), runtimeBuild ?: "<unavailable>", runtimeBuildResult,
+        RHSendInstallLog([NSString stringWithFormat:@"RootHide spawn 失败：阶段=%s，错误=%d (%s)，运行中 basebin=%s，探测=%d (%s)",
+            failureStage ?: "unknown", spawnResult, strerror(spawnResult), runtimeBuild ?: "<unavailable>", runtimeBuildResult,
             runtimeBuildResult == 0 ? "ok" : strerror(runtimeBuildResult)]);
+        free(failureStage);
         free(runtimeBuild);
         return spawnResult;
     }
+    free(failureStage);
 
     NSMutableString *pending = [NSMutableString string];
     char buffer[2048];
@@ -320,7 +345,17 @@ static void RHInstallOpenSSH(void)
 {
     NSString *apt = JBROOT_PATH(@"/usr/bin/apt-get");
     if (!apt.length || ![[NSFileManager defaultManager] isExecutableFileAtPath:apt]) {
-        RHSendInstallLog(@"RESULT: FAILED (RootHide apt-get 不存在)");
+        struct stat aptStat = {0};
+        errno = 0;
+        int statResult = apt.length ? lstat(apt.fileSystemRepresentation, &aptStat) : -1;
+        int statError = statResult == 0 ? 0 : errno;
+        errno = 0;
+        int accessResult = apt.length ? access(apt.fileSystemRepresentation, X_OK) : -1;
+        int accessError = accessResult == 0 ? 0 : errno;
+        RHSendInstallLog([NSString stringWithFormat:@"RESULT: FAILED (RootHide apt-get 不可执行：path=%@ stat=%d errno=%d (%s) mode=%o access=%d errno=%d (%s))",
+            apt ?: @"<nil>", statResult, statError, statError == 0 ? "ok" : strerror(statError),
+            statResult == 0 ? aptStat.st_mode & 07777 : 0,
+            accessResult, accessError, accessError == 0 ? "ok" : strerror(accessError)]);
         return;
     }
 

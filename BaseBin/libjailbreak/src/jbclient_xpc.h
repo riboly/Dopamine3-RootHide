@@ -24,6 +24,7 @@ bool jbclient_jbsettings_get_bool(const char *key);
 uint64_t jbclient_jbsettings_get_uint64(const char *key);
 double jbclient_jbsettings_get_double(const char *key);
 int jbclient_persona_fix(int childPid, uid_t overwriteUid, gid_t overwriteGid);
+int jbclient_persona_fix_with_stage(int childPid, uid_t overwriteUid, gid_t overwriteGid, char **failureStageOut);
 int jbclient_get_runtime_build(char **buildOut);
 int jbclient_platform_set_process_debugged(uint64_t pid, bool fullyDebugged);
 int jbclient_platform_stage_jailbreak_update(const char *updateTar);

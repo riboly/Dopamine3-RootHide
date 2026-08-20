@@ -463,8 +463,15 @@ static int systemwide_cs_revalidate(audit_token_t *callerToken)
 // iOS 17.6+ rejects a non-root caller's direct persona 99 -> uid 0 spawn.
 // The caller therefore starts the child suspended as mobile and asks launchd's
 // kernel-capable server to replace its credentials before it is resumed.
-static int systemwide_persona_fix(audit_token_t *callerToken, int childPid, uid_t overwriteUid, gid_t overwriteGid)
+static int systemwide_persona_fix(audit_token_t *callerToken, int childPid, uid_t overwriteUid, gid_t overwriteGid, char **failureStageOut)
 {
+	if (failureStageOut) *failureStageOut = NULL;
+	const char *failureStage = "complete";
+	pid_t callerPid = 0;
+	uint64_t callerProc = 0;
+	uint64_t childProc = 0;
+	int result = 0;
+
 	xpc_object_t personaMgmtVal = xpc_copy_entitlement_for_token("com.apple.private.persona-mgmt", callerToken);
 	bool hasPersonaMgmtEntitlement = false;
 	if (personaMgmtVal) {
@@ -479,49 +486,66 @@ static int systemwide_persona_fix(audit_token_t *callerToken, int childPid, uid_
 		}
 		xpc_release(personaMgmtVal);
 	}
-	if (!hasPersonaMgmtEntitlement) return EACCES;
-	if (childPid <= 0) return EINVAL;
-
-	pid_t callerPid = audit_token_to_pid(*callerToken);
-	if (callerPid <= 0) return EINVAL;
-	uint64_t callerProc = proc_find(callerPid);
-	uint64_t childProc = proc_find(childPid);
-	if (!callerProc || !childProc) {
-		if (childProc) proc_rele(childProc);
-		if (callerProc) proc_rele(callerProc);
-		return ESRCH;
+	if (!hasPersonaMgmtEntitlement) {
+		failureStage = "persona-entitlement";
+		result = EACCES;
+		goto out;
+	}
+	if (childPid <= 0) {
+		failureStage = "persona-child-pid";
+		result = EINVAL;
+		goto out;
 	}
 
-	int result = 0;
+	callerPid = audit_token_to_pid(*callerToken);
+	if (callerPid <= 0) {
+		failureStage = "persona-caller-pid";
+		result = EINVAL;
+		goto out;
+	}
+	callerProc = proc_find(callerPid);
+	childProc = proc_find(childPid);
+	if (!callerProc || !childProc) {
+		failureStage = "persona-proc-find";
+		result = ESRCH;
+		goto out;
+	}
+
 	if (kread_ptr(childProc + koffsetof(proc, pptr)) != callerProc) {
+		failureStage = "persona-parent-validation";
 		result = EACCES;
 		goto out;
 	}
 
 	struct proc_bsdinfo childInfo = {0};
 	if (proc_pidinfo(childPid, PROC_PIDTBSDINFO, 0, &childInfo, sizeof(childInfo)) != sizeof(childInfo)) {
+		failureStage = "persona-child-info";
 		result = ESRCH;
 		goto out;
 	}
 	if (childInfo.pbi_status != SSTOP) {
+		failureStage = "persona-child-not-stopped";
 		result = EBUSY;
 		goto out;
 	}
 
 	char childProcPath[4 * MAXPATHLEN] = {0};
 	if (proc_pidpath(childPid, childProcPath, sizeof(childProcPath)) <= 0) {
+		failureStage = "persona-child-path";
 		result = ESRCH;
 		goto out;
 	}
 
 	uint64_t childUcred = proc_ucred(childProc);
 	if (!childUcred) {
+		failureStage = "persona-child-ucred";
 		result = EFAULT;
 		goto out;
 	}
 
 	gid_t groups[NGROUPS_MAX] = {0};
 	if (kreadbuf(childUcred + koffsetof(ucred, groups), groups, sizeof(groups)) != 0) {
+		failureStage = "persona-read-groups";
 		result = EIO;
 		goto out;
 	}
@@ -542,7 +566,9 @@ static int systemwide_persona_fix(audit_token_t *callerToken, int childPid, uid_
 
 	if (originalUid != uid || originalGid != gid) {
 		if (originalGid != gid) groups[0] = gid;
-		result = proc_ucred_update_content(childProc, childProcPath, uid, gid, uid, gid, groups);
+		const char *ucredFailureStage = NULL;
+		result = proc_ucred_update_content_with_stage(childProc, childProcPath, uid, gid, uid, gid, groups, &ucredFailureStage);
+		if (result != 0) failureStage = ucredFailureStage ?: "persona-ucred-update";
 		if (result != 0) goto out;
 	}
 	if (overwriteUid != (uid_t)-1) kwrite32(childProc + koffsetof(proc, svuid), uid);
@@ -550,10 +576,11 @@ static int systemwide_persona_fix(audit_token_t *callerToken, int childPid, uid_
 
 out:
 	if (result != 0) {
-		JBLogError("Persona fix failed caller=%d child=%d result=%d", callerPid, childPid, result);
+		JBLogError("Persona fix failed stage=%s caller=%d child=%d result=%d", failureStage, callerPid, childPid, result);
 	}
-	proc_rele(childProc);
-	proc_rele(callerProc);
+	if (failureStageOut) *failureStageOut = strdup(failureStage);
+	if (childProc) proc_rele(childProc);
+	if (callerProc) proc_rele(callerProc);
 	return result;
 }
 
@@ -642,6 +669,7 @@ struct jbserver_domain gSystemwideDomain = {
 				{ .name = "child-pid", .type = JBS_TYPE_UINT64, .out = false },
 				{ .name = "overwrite-uid", .type = JBS_TYPE_UINT64, .out = false },
 				{ .name = "overwrite-gid", .type = JBS_TYPE_UINT64, .out = false },
+				{ .name = "failure-stage", .type = JBS_TYPE_STRING, .out = true },
 				{ 0 },
 			},
 		},
