@@ -804,7 +804,7 @@ int exec_cmd_roothide_spawn_root_diagnostic(pid_t* pidp, const char* path, const
 {
 	if (failureStageOut) *failureStageOut = NULL;
 	if (__builtin_available(iOS 17.6, *)) {
-		if (getuid() != 0) {
+		if (geteuid() != 0) {
 			short originalFlags = 0;
 			if (attrp) posix_spawnattr_getflags(attrp, &originalFlags);
 

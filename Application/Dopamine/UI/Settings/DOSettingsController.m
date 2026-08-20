@@ -33,14 +33,6 @@
 
 extern char **environ;
 
-#ifndef POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE
-#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
-#endif
-
-extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *__restrict, uid_t, uint32_t);
-extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *__restrict, uid_t);
-extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *__restrict, uid_t);
-
 @interface DOSettingsController ()
 
 @end
@@ -268,25 +260,15 @@ static int RHRunInstallCommand(NSArray<NSString *> *arguments)
     posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDERR_FILENO);
     posix_spawn_file_actions_addclose(&actions, outputPipe[0]);
 
-    // RootHide does not guarantee that the Dopamine app can change its own
-    // uid/euid. Spawn through libjailbreak's RootHide-aware path with the
-    // root persona so dpkg/apt really execute as uid 0.
-    posix_spawnattr_t attributes = NULL;
-    posix_spawnattr_init(&attributes);
-    posix_spawnattr_set_persona_np(&attributes, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
-    posix_spawnattr_set_persona_uid_np(&attributes, 0);
-    posix_spawnattr_set_persona_gid_np(&attributes, 0);
-
     __block pid_t pid = 0;
     __block char *failureStage = NULL;
     __block int spawnResult = EPERM;
     BOOL enteredRootScope = RHRunRootUnsandboxed(^{
-        spawnResult = exec_cmd_roothide_spawn_root_diagnostic(&pid, argv[0], &actions, &attributes, argv, environ, &failureStage);
+        spawnResult = exec_cmd_roothide_spawn_root_diagnostic(&pid, argv[0], &actions, NULL, argv, environ, &failureStage);
     });
     if (!enteredRootScope) {
         failureStage = strdup("dopamine-root-scope");
     }
-    posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
     close(outputPipe[1]);
     for (NSUInteger i = 0; i < arguments.count; i++) free(argv[i]);
