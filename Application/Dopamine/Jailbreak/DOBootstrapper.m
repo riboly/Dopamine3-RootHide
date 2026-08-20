@@ -1517,10 +1517,8 @@ int getCFMajorVersion(void)
     }
 
     DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
-    [environmentManager runAsRoot:^{
-        [environmentManager runUnsandboxed:^{
-            [self repairRootHideManagerHelper];
-        }];
+    [environmentManager runUnsandboxed:^{
+        [self repairRootHideManagerHelper];
     }];
     
     BOOL shouldInstallLibkrw = [self shouldInstallPackage:@"libkrw0-dopamine"];

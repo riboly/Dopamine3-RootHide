@@ -280,7 +280,9 @@ static int RHProcursusSuiteVersion(void)
 
 static NSString *RHWriteIsolatedProcursusSources(void)
 {
-    NSString *sourcePath = JBROOT_PATH(@"/tmp/dopamine-roothide-install.sources");
+    // The source file is only read by the unsandboxed apt child. Keep it in
+    // the app's temporary directory so creation does not depend on setuid(0).
+    NSString *sourcePath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"dopamine-roothide-install.sources"];
     NSString *contents = [NSString stringWithFormat:
         @"Types: deb\n"
         @"URIs: https://roothide.github.io/procursus\n"
@@ -292,7 +294,6 @@ static NSString *RHWriteIsolatedProcursusSources(void)
         return nil;
     }
     chmod(sourcePath.fileSystemRepresentation, 0644);
-    chown(sourcePath.fileSystemRepresentation, 0, 0);
     return sourcePath;
 }
 
@@ -369,35 +370,28 @@ static void RHInstallFridaFromURL(NSURL *url)
         DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
         __block int installResult = EIO;
         __block BOOL copied = NO;
-        NSString *destinationName = [NSString stringWithFormat:@"/tmp/frida-roothide-%@.deb", NSUUID.UUID.UUIDString];
-        NSString *destination = JBROOT_PATH(destinationName);
-        [environmentManager runAsRoot:^{
-            [environmentManager runUnsandboxed:^{
-                NSString *tmpDirectory = JBROOT_PATH(@"/tmp");
-                [[NSFileManager defaultManager] createDirectoryAtPath:tmpDirectory withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0755} error:nil];
-                NSError *copyError = nil;
-                copied = [[NSFileManager defaultManager] copyItemAtPath:location.path toPath:destination error:&copyError];
-                if (!copied) {
-                    RHSendInstallLog([NSString stringWithFormat:@"复制 Frida 包失败：%@", copyError.localizedDescription ?: @"未知错误"]);
-                } else {
-                    NSDictionary *fileAttributes = [[NSFileManager defaultManager] attributesOfItemAtPath:destination error:nil];
-                    unsigned long long fileSize = [[fileAttributes objectForKey:NSFileSize] unsignedLongLongValue];
-                    RHSendInstallLog([NSString stringWithFormat:@"已下载 %.1f MB，开始 dpkg 安装", (double)fileSize / (1024.0 * 1024.0)]);
-                    installResult = RHRunInstallCommand(@[JBROOT_PATH(@"/usr/bin/dpkg"), @"-i", destination]);
-                }
-                [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
-            }];
+        NSString *destination = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"frida-roothide-%@.deb", NSUUID.UUID.UUIDString]];
+        [environmentManager runUnsandboxed:^{
+            NSError *copyError = nil;
+            copied = [[NSFileManager defaultManager] copyItemAtPath:location.path toPath:destination error:&copyError];
+            if (!copied) {
+                RHSendInstallLog([NSString stringWithFormat:@"复制 Frida 包失败：%@", copyError.localizedDescription ?: @"未知错误"]);
+            } else {
+                NSDictionary *fileAttributes = [[NSFileManager defaultManager] attributesOfItemAtPath:destination error:nil];
+                unsigned long long fileSize = [[fileAttributes objectForKey:NSFileSize] unsignedLongLongValue];
+                RHSendInstallLog([NSString stringWithFormat:@"已下载 %.1f MB，开始 dpkg 安装", (double)fileSize / (1024.0 * 1024.0)]);
+                installResult = RHRunInstallCommand(@[JBROOT_PATH(@"/usr/bin/dpkg"), @"-i", destination]);
+            }
+            [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
         }];
 
         __block BOOL packageInstalled = NO;
         __block BOOL serverPresent = NO;
         __block BOOL launchDaemonPresent = NO;
-        [environmentManager runAsRoot:^{
-            [environmentManager runUnsandboxed:^{
-                packageInstalled = RHStatusContainsInstalledPackage(@"re.frida.server", @"iphoneos-arm64e");
-                serverPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/sbin/frida-server")];
-                launchDaemonPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/Library/LaunchDaemons/re.frida.server.plist")];
-            }];
+        [environmentManager runUnsandboxed:^{
+            packageInstalled = RHStatusContainsInstalledPackage(@"re.frida.server", @"iphoneos-arm64e");
+            serverPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/sbin/frida-server")];
+            launchDaemonPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/Library/LaunchDaemons/re.frida.server.plist")];
         }];
         if (copied && installResult == 0 && packageInstalled && serverPresent && launchDaemonPresent) {
             RHSendInstallLog(@"检测通过：re.frida.server、frida-server 与 LaunchDaemon 均已安装");
@@ -1066,10 +1060,8 @@ static void RHInstallFridaFromURL(NSURL *url)
     NSString *documentsPath = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
     __block NSString *diagnostic = nil;
     DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
-    [environmentManager runAsRoot:^{
-        [environmentManager runUnsandboxed:^{
-            diagnostic = RHBuildPackageDiagnostic();
-        }];
+    [environmentManager runUnsandboxed:^{
+        diagnostic = RHBuildPackageDiagnostic();
     }];
 
     if (!diagnostic.length) {
@@ -1103,10 +1095,8 @@ static void RHInstallFridaFromURL(NSURL *url)
     [self pushRootHideInstallLogWithTitle:DOLocalizedString(@"Button_Install_OpenSSH") operation:^{
         RHSendInstallLog(@"开始安装 OpenSSH Server（RootHide 隔离环境）");
         DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
-        [environmentManager runAsRoot:^{
-            [environmentManager runUnsandboxed:^{
-                RHInstallOpenSSH();
-            }];
+        [environmentManager runUnsandboxed:^{
+            RHInstallOpenSSH();
         }];
     }];
 }
