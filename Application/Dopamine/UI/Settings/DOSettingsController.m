@@ -143,7 +143,10 @@ static NSString *RHBuildPackageDiagnostic(void)
 
     NSString *root = gSystemInfo.jailbreakInfo.rootPath ?
         [NSString stringWithUTF8String:gSystemInfo.jailbreakInfo.rootPath] : nil;
-    [output appendFormat:@"jbroot=%@\n\n", root ?: @"<nil>"];
+    int consumedExtensionCount = 0;
+    int permissionResult = jbclient_process_checkin_consume_sandbox_extensions(&consumedExtensionCount);
+    [output appendFormat:@"jbroot=%@\npermission_checkin=%d (%s) consumed_extensions=%d\n\n",
+        root ?: @"<nil>", permissionResult, permissionResult == 0 ? "ok" : strerror(permissionResult), consumedExtensionCount];
     if (!root.length) return output;
 
     NSArray<NSString *> *pathSnapshots = @[
@@ -229,6 +232,14 @@ static void RHSendInstallLog(NSString *line)
 static int RHRunInstallCommand(NSArray<NSString *> *arguments)
 {
     if (arguments.count == 0) return EINVAL;
+
+    int consumedExtensionCount = 0;
+    int permissionResult = jbclient_process_checkin_consume_sandbox_extensions(&consumedExtensionCount);
+    if (permissionResult != 0) {
+        RHSendInstallLog([NSString stringWithFormat:@"RootHide 执行权限初始化失败：错误=%d (%s)，已消费令牌=%d",
+            permissionResult, strerror(permissionResult), consumedExtensionCount]);
+        return permissionResult;
+    }
 
     int outputPipe[2] = {-1, -1};
     if (pipe(outputPipe) != 0) return errno;
@@ -343,6 +354,15 @@ static NSString *RHWriteIsolatedProcursusSources(void)
 
 static void RHInstallOpenSSH(void)
 {
+    int consumedExtensionCount = 0;
+    int permissionResult = jbclient_process_checkin_consume_sandbox_extensions(&consumedExtensionCount);
+    if (permissionResult != 0) {
+        RHSendInstallLog([NSString stringWithFormat:@"RootHide 执行权限初始化失败：错误=%d (%s)，已消费令牌=%d",
+            permissionResult, strerror(permissionResult), consumedExtensionCount]);
+        RHSendInstallLog(@"RESULT: FAILED");
+        return;
+    }
+
     NSString *apt = JBROOT_PATH(@"/usr/bin/apt-get");
     if (!apt.length || ![[NSFileManager defaultManager] isExecutableFileAtPath:apt]) {
         struct stat aptStat = {0};

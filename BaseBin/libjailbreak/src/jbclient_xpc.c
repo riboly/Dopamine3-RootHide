@@ -2,6 +2,8 @@
 #include "jbclient_mach.h"
 #include "jbserver.h"
 #include <errno.h>
+#include <sandbox.h>
+#include <stdlib.h>
 #include <string.h>
 #include <dispatch/dispatch.h>
 #include <sys/stat.h>
@@ -195,6 +197,43 @@ int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sand
 		return result;
 	}
 	return -1;
+}
+
+int jbclient_process_checkin_consume_sandbox_extensions(int *consumedCountOut)
+{
+	if (consumedCountOut) *consumedCountOut = 0;
+
+	char *sandboxExtensions = NULL;
+	int checkinResult = jbclient_process_checkin(NULL, NULL, &sandboxExtensions, NULL, NULL);
+	if (checkinResult != 0) {
+		free(sandboxExtensions);
+		return checkinResult > 0 ? checkinResult : ENOTCONN;
+	}
+	if (!sandboxExtensions || sandboxExtensions[0] == '\0') {
+		free(sandboxExtensions);
+		return ENOENT;
+	}
+
+	int consumedCount = 0;
+	int consumeError = 0;
+	char *cursor = sandboxExtensions;
+	while (cursor && cursor[0] != '\0') {
+		char *separator = strchr(cursor, '|');
+		if (separator) *separator = '\0';
+
+		errno = 0;
+		if (sandbox_extension_consume(cursor) < 0) {
+			if (consumeError == 0) consumeError = errno ?: EPERM;
+		} else {
+			consumedCount++;
+		}
+
+		cursor = separator ? separator + 1 : NULL;
+	}
+
+	free(sandboxExtensions);
+	if (consumedCountOut) *consumedCountOut = consumedCount;
+	return consumeError;
 }
 
 int jbclient_fork_fix(uint64_t childPid)

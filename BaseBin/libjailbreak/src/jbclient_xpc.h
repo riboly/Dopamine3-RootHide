@@ -17,6 +17,7 @@ int jbclient_trust_file(int fd, struct siginfo *siginfo, bool attach);
 int jbclient_trust_file_by_path(const char *path);
 void jbclient_set_trust_file_local_handler(int (*handler)(int fd));
 int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sandboxExtensionsOut, bool *fullyDebuggedOut, bool *forceCSAdhocOut);
+int jbclient_process_checkin_consume_sandbox_extensions(int *consumedCountOut);
 int jbclient_fork_fix(uint64_t childPid);
 int jbclient_cs_revalidate(void);
 int jbclient_jbsettings_get(const char *key, xpc_object_t *valueOut);
