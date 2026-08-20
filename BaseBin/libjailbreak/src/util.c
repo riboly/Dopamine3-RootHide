@@ -18,6 +18,7 @@
 #include <mach-o/dyld_images.h>
 #include <mach-o/getsect.h>
 #include <dyld_cache_format.h>
+#include <errno.h>
 #include <sys/param.h>
 #include <sys/wait.h>
 #include <poll.h>
