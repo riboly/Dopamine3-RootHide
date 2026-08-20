@@ -281,7 +281,8 @@ static void RHInstallFridaFromURL(NSURL *url)
         DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
         __block int installResult = EIO;
         __block BOOL copied = NO;
-        NSString *destination = JBROOT_PATH([NSString stringWithFormat:@"/tmp/frida-roothide-%@.deb", NSUUID.UUID.UUIDString]);
+        NSString *destinationName = [NSString stringWithFormat:@"/tmp/frida-roothide-%@.deb", NSUUID.UUID.UUIDString];
+        NSString *destination = JBROOT_PATH(destinationName);
         [environmentManager runAsRoot:^{
             [environmentManager runUnsandboxed:^{
                 NSString *tmpDirectory = JBROOT_PATH(@"/tmp");
