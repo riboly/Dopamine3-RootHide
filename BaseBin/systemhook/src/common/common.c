@@ -122,15 +122,17 @@ xpc_object_t jbuserconfig_get_value(const char *key)
 
 static bool is_apt_helper_path(const char *path)
 {
-	// Keep systemhook in apt-get so it can trust transports spawned later.
-	// Only the short-lived transport itself must be injection-free.
-	return path && strstr(path, "/apt/methods/") != NULL;
+	if (!path || strstr(path, "/apt/methods/") == NULL) return false;
+
+	// The gpgv method launches the apt-key shell script, so it must retain
+	// systemhook for RootHide path translation. Network transports stay native.
+	return !string_has_suffix(path, "/gpgv");
 }
 
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
 	if (is_apt_helper_path(path)) {
-		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C36] trust-only APT transport path=%{public}s", path);
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C37] trust-only APT transport path=%{public}s", path);
 		return kSpawnConfigTrust;
 	}
 

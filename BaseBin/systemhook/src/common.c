@@ -62,7 +62,11 @@ void string_enumerate_components(const char *string, const char *separator, void
 
 bool is_apt_transport_path(const char *path)
 {
-	return path && strstr(path, "/apt/methods/") != NULL;
+	if (!path || strstr(path, "/apt/methods/") == NULL) return false;
+
+	// The gpgv method launches the apt-key shell script, so it must retain
+	// systemhook for RootHide path translation. Network transports stay native.
+	return !string_has_suffix(path, "/gpgv");
 }
 
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
@@ -70,7 +74,7 @@ kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[rest
 	// APT transports are short-lived native helpers. Trust their dependency
 	// tree, but never inject systemhook or suspend them for patching.
 	if (is_apt_transport_path(path)) {
-		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C33] trust-only APT helper path=%{public}s", path);
+		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C34] trust-only APT transport path=%{public}s", path);
 		return kSpawnConfigTrust;
 	}
 
