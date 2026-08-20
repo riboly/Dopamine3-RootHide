@@ -229,6 +229,19 @@ static void RHSendInstallLog(NSString *line)
     }
 }
 
+static BOOL RHRunRootUnsandboxed(void (^operation)(void))
+{
+    if (!operation) return NO;
+
+    DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
+    __block BOOL enteredRootScope = NO;
+    [environmentManager runAsRoot:^{
+        enteredRootScope = YES;
+        [environmentManager runUnsandboxed:operation];
+    }];
+    return enteredRootScope;
+}
+
 static int RHRunInstallCommand(NSArray<NSString *> *arguments)
 {
     if (arguments.count == 0) return EINVAL;
@@ -264,9 +277,15 @@ static int RHRunInstallCommand(NSArray<NSString *> *arguments)
     posix_spawnattr_set_persona_uid_np(&attributes, 0);
     posix_spawnattr_set_persona_gid_np(&attributes, 0);
 
-    pid_t pid = 0;
-    char *failureStage = NULL;
-    int spawnResult = exec_cmd_roothide_spawn_root_diagnostic(&pid, argv[0], &actions, &attributes, argv, environ, &failureStage);
+    __block pid_t pid = 0;
+    __block char *failureStage = NULL;
+    __block int spawnResult = EPERM;
+    BOOL enteredRootScope = RHRunRootUnsandboxed(^{
+        spawnResult = exec_cmd_roothide_spawn_root_diagnostic(&pid, argv[0], &actions, &attributes, argv, environ, &failureStage);
+    });
+    if (!enteredRootScope) {
+        failureStage = strdup("dopamine-root-scope");
+    }
     posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
     close(outputPipe[1]);
@@ -364,14 +383,24 @@ static void RHInstallOpenSSH(void)
     }
 
     NSString *apt = JBROOT_PATH(@"/usr/bin/apt-get");
-    if (!apt.length || ![[NSFileManager defaultManager] isExecutableFileAtPath:apt]) {
-        struct stat aptStat = {0};
+    __block struct stat aptStat = {0};
+    __block int statResult = -1;
+    __block int statError = 0;
+    __block int accessResult = -1;
+    __block int accessError = 0;
+    BOOL enteredRootScope = RHRunRootUnsandboxed(^{
         errno = 0;
-        int statResult = apt.length ? lstat(apt.fileSystemRepresentation, &aptStat) : -1;
-        int statError = statResult == 0 ? 0 : errno;
+        statResult = apt.length ? lstat(apt.fileSystemRepresentation, &aptStat) : -1;
+        statError = statResult == 0 ? 0 : errno;
         errno = 0;
-        int accessResult = apt.length ? access(apt.fileSystemRepresentation, X_OK) : -1;
-        int accessError = accessResult == 0 ? 0 : errno;
+        accessResult = apt.length ? access(apt.fileSystemRepresentation, X_OK) : -1;
+        accessError = accessResult == 0 ? 0 : errno;
+    });
+    if (!enteredRootScope || statResult != 0 || accessResult != 0) {
+        if (!enteredRootScope) {
+            statError = EPERM;
+            accessError = EPERM;
+        }
         RHSendInstallLog([NSString stringWithFormat:@"RESULT: FAILED (RootHide apt-get 不可执行：path=%@ stat=%d errno=%d (%s) mode=%o access=%d errno=%d (%s))",
             apt ?: @"<nil>", statResult, statError, statError == 0 ? "ok" : strerror(statError),
             statResult == 0 ? aptStat.st_mode & 07777 : 0,
@@ -441,28 +470,25 @@ static void RHInstallFridaFromURL(NSURL *url)
             return;
         }
 
-        DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
         __block int installResult = EIO;
         __block BOOL copied = NO;
         NSString *destination = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"frida-roothide-%@.deb", NSUUID.UUID.UUIDString]];
-        [environmentManager runUnsandboxed:^{
-            NSError *copyError = nil;
-            copied = [[NSFileManager defaultManager] copyItemAtPath:location.path toPath:destination error:&copyError];
-            if (!copied) {
-                RHSendInstallLog([NSString stringWithFormat:@"复制 Frida 包失败：%@", copyError.localizedDescription ?: @"未知错误"]);
-            } else {
-                NSDictionary *fileAttributes = [[NSFileManager defaultManager] attributesOfItemAtPath:destination error:nil];
-                unsigned long long fileSize = [[fileAttributes objectForKey:NSFileSize] unsignedLongLongValue];
-                RHSendInstallLog([NSString stringWithFormat:@"已下载 %.1f MB，开始 dpkg 安装", (double)fileSize / (1024.0 * 1024.0)]);
-                installResult = RHRunInstallCommand(@[JBROOT_PATH(@"/usr/bin/dpkg"), @"-i", destination]);
-            }
-            [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
-        }];
+        NSError *copyError = nil;
+        copied = [[NSFileManager defaultManager] copyItemAtPath:location.path toPath:destination error:&copyError];
+        if (!copied) {
+            RHSendInstallLog([NSString stringWithFormat:@"复制 Frida 包失败：%@", copyError.localizedDescription ?: @"未知错误"]);
+        } else {
+            NSDictionary *fileAttributes = [[NSFileManager defaultManager] attributesOfItemAtPath:destination error:nil];
+            unsigned long long fileSize = [[fileAttributes objectForKey:NSFileSize] unsignedLongLongValue];
+            RHSendInstallLog([NSString stringWithFormat:@"已下载 %.1f MB，开始 dpkg 安装", (double)fileSize / (1024.0 * 1024.0)]);
+            installResult = RHRunInstallCommand(@[JBROOT_PATH(@"/usr/bin/dpkg"), @"-i", destination]);
+        }
+        [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
 
         __block BOOL packageInstalled = NO;
         __block BOOL serverPresent = NO;
         __block BOOL launchDaemonPresent = NO;
-        [environmentManager runUnsandboxed:^{
+        RHRunRootUnsandboxed(^{
             packageInstalled = RHStatusContainsInstalledPackage(@"re.frida.server", @"iphoneos-arm64e");
             serverPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/sbin/frida-server")];
             launchDaemonPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/Library/LaunchDaemons/re.frida.server.plist")];
@@ -1130,8 +1156,7 @@ static void RHInstallFridaFromURL(NSURL *url)
 - (void)exportRootHidePackageDiagnosticsPressed
 {
 	__block NSString *diagnostic = nil;
-    DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
-    [environmentManager runUnsandboxed:^{
+    RHRunRootUnsandboxed(^{
         diagnostic = RHBuildPackageDiagnostic();
     }];
 
@@ -1165,10 +1190,7 @@ static void RHInstallFridaFromURL(NSURL *url)
 {
     [self pushRootHideInstallLogWithTitle:DOLocalizedString(@"Button_Install_OpenSSH") operation:^{
         RHSendInstallLog(@"开始安装 OpenSSH Server（RootHide 隔离环境）");
-        DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
-        [environmentManager runUnsandboxed:^{
-            RHInstallOpenSSH();
-        }];
+        RHInstallOpenSSH();
     }];
 }
 

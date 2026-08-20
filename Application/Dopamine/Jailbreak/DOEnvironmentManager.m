@@ -341,22 +341,17 @@ extern char **environ;
 
 - (void)runAsRoot:(void (^)(void))rootBlock
 {
-    uint32_t orgUser = getuid();
-    uint32_t orgGroup = getgid();
-    if (geteuid() == 0 && orgGroup == 0) {
+    uint32_t orgUser = geteuid();
+    uint32_t orgGroup = getegid();
+    if (orgUser == 0 && orgGroup == 0) {
         rootBlock();
         return;
     }
 
-    int ur = 0, gr = 0;
-    if (orgUser != 0) ur = setuid(0);
-    if (orgGroup != 0) gr = setgid(0);
-    if (ur == 0 && gr == 0) {
+    if (self.isJailbroken && jbclient_dopamine_get_root() == 0) {
         rootBlock();
+        jbclient_dopamine_drop_root();
     }
-    
-    if (gr == 0 && orgGroup != 0) setgid(orgGroup);
-    if (ur == 0 && orgUser != 0) seteuid(orgUser);
 }
 
 - (int)spawnJbctlAsRootWithArgs:(NSArray<NSString *> *)args
