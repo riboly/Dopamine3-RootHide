@@ -707,9 +707,7 @@ int exec_cmd_roothide_spawn(pid_t* pidp, const char* path, const posix_spawn_fil
         need_patch_child = false;
     }
 
-    const char *jbroot = JBROOT_PATH("/");
-    bool path_in_jbroot = jbroot && isSubPathOf(path, jbroot);
-    if(path_in_jbroot || (need_patch_child && !dyld_patch_enabled())) {
+    if(need_patch_child && !dyld_patch_enabled()) {
         if(jbclient_trust_executable_recurse(path, NULL) != 0) {
             JBLogError("Failed to trust executable: %s", path);
             return 999;
