@@ -9,6 +9,7 @@
 #import <objc/runtime.h>
 #import <Photos/Photos.h>
 #import <libjailbreak/util.h>
+#import <libjailbreak/jbroot.h>
 #import <errno.h>
 #import <string.h>
 #import <sys/stat.h>
