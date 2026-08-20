@@ -44,10 +44,17 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	if (getuid() != 0 && geteuid() == 0) {
+	if (geteuid() == 0) {
 		// When jailbroken the Dopamine app cannot have uid 0 because it can't drop it anymore without loosing it
 		// So in some cases (e.g. for spawning dpkg) we need to use jbctl to get it
-		setuid(0);
+		if (getgid() != 0 && setgid(0) != 0) {
+			fprintf(stderr, "ERROR: jbctl failed to persist root gid: %s\n", strerror(errno));
+			return 39;
+		}
+		if (getuid() != 0 && setuid(0) != 0) {
+			fprintf(stderr, "ERROR: jbctl failed to persist root uid: %s\n", strerror(errno));
+			return 40;
+		}
 	}
 
 	if (argc > 2) {
@@ -58,6 +65,8 @@ int main(int argc, char* argv[])
 			int r = 0;
 			read(fd, &r, sizeof(r));
 			close(fd);
+			argc -= 2;
+			argv[argc] = NULL;
 		}
 	}
 
@@ -218,7 +227,11 @@ int main(int argc, char* argv[])
 		}
 	}
 	else if (!strcmp(cmd, "internal")) {
-		if (getuid() != 0) return 41;
+		if (getuid() != 0) {
+			fprintf(stderr, "ERROR: jbctl internal requires root: uid=%d euid=%d gid=%d egid=%d\n",
+				getuid(), geteuid(), getgid(), getegid());
+			return 41;
+		}
 		if (argc < 3) return 42;
 
 		const char *internalCmd = argv[2];

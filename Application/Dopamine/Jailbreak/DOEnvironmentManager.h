@@ -50,6 +50,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)runUnsandboxed:(void (^)(void))unsandboxBlock;
 - (void)runAsRoot:(void (^)(void))rootBlock;
+- (int)spawnJbctlAsRootWithArgs:(NSArray<NSString *> *)args;
+- (int)spawnJbctlAsRootWithArgs:(NSArray<NSString *> *)args outputHandler:(void (^ _Nullable)(NSString *line))outputHandler;
 
 - (void)respring;
 - (void)rebootUserspace;

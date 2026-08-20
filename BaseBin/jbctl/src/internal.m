@@ -259,6 +259,17 @@ JBLogDebug("jbctl startup: refreshing jailbroken apps ...");
 		}
 		return -1;
 	}
+	else if (!strcmp(command, "exec_command")) {
+		if (argc <= 1 || !argv[1]) return EINVAL;
+
+		extern char **environ;
+		fprintf(stderr, "RootHide command identity: uid=%d euid=%d gid=%d egid=%d\n",
+			getuid(), geteuid(), getgid(), getegid());
+		execve(argv[1], &argv[1], environ);
+		int execError = errno;
+		fprintf(stderr, "ERROR: execve(%s) failed: %s\n", argv[1], strerror(execError));
+		return execError;
+	}
 	else if (!strcmp(command, "mount") || !strcmp(command, "unmount")) {
 		if (argc <= 1 || !argv[1]) return EINVAL;
 

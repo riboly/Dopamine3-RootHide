@@ -12,6 +12,7 @@
 #import <sys/mount.h>
 #import <sys/utsname.h>
 #import <sys/stat.h>
+#import <sys/wait.h>
 #import <errno.h>
 #import <unistd.h>
 #import <mach-o/dyld.h>
@@ -356,6 +357,13 @@ extern char **environ;
 
 - (int)spawnJbctlAsRootWithArgs:(NSArray<NSString *> *)args
 {
+    return [self spawnJbctlAsRootWithArgs:args outputHandler:nil];
+}
+
+- (int)spawnJbctlAsRootWithArgs:(NSArray<NSString *> *)args outputHandler:(void (^ _Nullable)(NSString *line))outputHandler
+{
+    if (args.count == 0) return EINVAL;
+
     BOOL needsLegacySolution = NO;
     NSString *jailbrokenVersion = self.jailbrokenVersion;
     if (jailbrokenVersion.length) {
@@ -389,9 +397,31 @@ extern char **environ;
             return pipeError;
         }
         posix_spawn_file_actions_adddup2(&actions, waitPipe[0], 3);
+        if (waitPipe[0] != 3) posix_spawn_file_actions_addclose(&actions, waitPipe[0]);
+        posix_spawn_file_actions_addclose(&actions, waitPipe[1]);
     }
     else {
         posix_spawnattr_setflags(&attributes, POSIX_SPAWN_START_SUSPENDED);
+    }
+
+    int outputPipe[2] = {-1, -1};
+    if (outputHandler) {
+        if (pipe(outputPipe) != 0) {
+            int pipeError = errno;
+            if (waitPipe[0] >= 0) close(waitPipe[0]);
+            if (waitPipe[1] >= 0) close(waitPipe[1]);
+            posix_spawnattr_destroy(&attributes);
+            posix_spawn_file_actions_destroy(&actions);
+            for (int y = 0; y < i; y++) free(argBuf[y]);
+            free(argBuf);
+            return pipeError;
+        }
+        posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDOUT_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDERR_FILENO);
+        posix_spawn_file_actions_addclose(&actions, outputPipe[0]);
+        if (outputPipe[1] != STDOUT_FILENO && outputPipe[1] != STDERR_FILENO) {
+            posix_spawn_file_actions_addclose(&actions, outputPipe[1]);
+        }
     }
 
     __block pid_t pid = 0;
@@ -412,6 +442,8 @@ extern char **environ;
     for (int y = 0; y < i; y++) free(argBuf[y]);
     free(argBuf);
 
+    if (outputPipe[1] >= 0) close(outputPipe[1]);
+
     if (!needsLegacySolution) {
         if (spawnResult == 0) {
             char resumeByte = 'w';
@@ -421,7 +453,36 @@ extern char **environ;
         close(waitPipe[1]);
     }
 
-    return spawnResult == 0 ? cmd_wait_for_exit(pid) : spawnResult;
+    if (spawnResult != 0) {
+        if (outputPipe[0] >= 0) close(outputPipe[0]);
+        return spawnResult;
+    }
+
+    if (outputPipe[0] >= 0) {
+        NSMutableString *pending = [NSMutableString string];
+        char buffer[2048];
+        ssize_t bytesRead = 0;
+        while ((bytesRead = read(outputPipe[0], buffer, sizeof(buffer))) > 0) {
+            NSString *chunk = [[NSString alloc] initWithBytes:buffer length:(NSUInteger)bytesRead encoding:NSUTF8StringEncoding];
+            if (!chunk) chunk = [[NSString alloc] initWithBytes:buffer length:(NSUInteger)bytesRead encoding:NSASCIIStringEncoding];
+            if (!chunk) continue;
+            [pending appendString:chunk];
+            while (YES) {
+                NSRange newline = [pending rangeOfString:@"\n"];
+                if (newline.location == NSNotFound) break;
+                outputHandler([pending substringToIndex:newline.location]);
+                [pending deleteCharactersInRange:NSMakeRange(0, newline.location + 1)];
+            }
+        }
+        close(outputPipe[0]);
+        if (pending.length) outputHandler(pending);
+    }
+
+    int waitStatus = 0;
+    if (waitpid(pid, &waitStatus, 0) < 0) return errno;
+    if (WIFEXITED(waitStatus)) return WEXITSTATUS(waitStatus);
+    if (WIFSIGNALED(waitStatus)) return 128 + WTERMSIG(waitStatus);
+    return ECHILD;
 }
 
 - (int)runTrollStoreAction:(NSString *)action

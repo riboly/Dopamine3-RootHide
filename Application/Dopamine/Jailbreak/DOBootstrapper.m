@@ -615,10 +615,9 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
         return exec_cmd_trusted(JBROOT_PATH("/usr/bin/dpkg"), "-i", packagePath.fileSystemRepresentation, NULL);
     }
     else {
-        // RootHide may leave the Dopamine process as mobile even after the
-        // jailbreak succeeds. Use libjailbreak's root persona for jbctl so
-        // its dpkg child can create root-owned package state and run scripts.
-        return exec_cmd_root(JBROOT_PATH("/basebin/jbctl"), "internal", "install_pkg", packagePath.fileSystemRepresentation, NULL);
+        return [[DOEnvironmentManager sharedManager] spawnJbctlAsRootWithArgs:@[
+            @"internal", @"install_pkg", packagePath
+        ]];
     }
 }
 

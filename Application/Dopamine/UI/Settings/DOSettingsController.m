@@ -14,10 +14,7 @@
 #import <errno.h>
 #import <string.h>
 #import <sys/stat.h>
-#import <sys/wait.h>
-#import <spawn.h>
 #import <unistd.h>
-#import <fcntl.h>
 #import "DOUIManager.h"
 #import "DOPkgManagerPickerViewController.h"
 #import "DOHeaderCell.h"
@@ -30,8 +27,6 @@
 #import "DOPSJetsamListItemsController.h"
 #import "DOButtonCell.h"
 #import "DOLogCrashViewController.h"
-
-extern char **environ;
 
 @interface DOSettingsController ()
 
@@ -238,79 +233,13 @@ static int RHRunInstallCommand(NSArray<NSString *> *arguments)
 {
     if (arguments.count == 0) return EINVAL;
 
-    int consumedExtensionCount = 0;
-    int permissionResult = jbclient_process_checkin_consume_sandbox_extensions(&consumedExtensionCount);
-    if (permissionResult != 0) {
-        RHSendInstallLog([NSString stringWithFormat:@"RootHide 执行权限初始化失败：错误=%d (%s)，已消费令牌=%d",
-            permissionResult, strerror(permissionResult), consumedExtensionCount]);
-        return permissionResult;
-    }
-
-    int outputPipe[2] = {-1, -1};
-    if (pipe(outputPipe) != 0) return errno;
-
-    char **argv = calloc(arguments.count + 1, sizeof(char *));
-    for (NSUInteger i = 0; i < arguments.count; i++) {
-        argv[i] = strdup(arguments[i].fileSystemRepresentation);
-    }
-
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDOUT_FILENO);
-    posix_spawn_file_actions_adddup2(&actions, outputPipe[1], STDERR_FILENO);
-    posix_spawn_file_actions_addclose(&actions, outputPipe[0]);
-
-    __block pid_t pid = 0;
-    __block char *failureStage = NULL;
-    __block int spawnResult = EPERM;
-    BOOL enteredRootScope = RHRunRootUnsandboxed(^{
-        spawnResult = exec_cmd_roothide_spawn_root_diagnostic(&pid, argv[0], &actions, NULL, argv, environ, &failureStage);
-    });
-    if (!enteredRootScope) {
-        failureStage = strdup("dopamine-root-scope");
-    }
-    posix_spawn_file_actions_destroy(&actions);
-    close(outputPipe[1]);
-    for (NSUInteger i = 0; i < arguments.count; i++) free(argv[i]);
-    free(argv);
-
-    if (spawnResult != 0) {
-        close(outputPipe[0]);
-        char *runtimeBuild = NULL;
-        int runtimeBuildResult = jbclient_get_runtime_build(&runtimeBuild);
-        RHSendInstallLog([NSString stringWithFormat:@"RootHide spawn 失败：阶段=%s，错误=%d (%s)，运行中 basebin=%s，探测=%d (%s)",
-            failureStage ?: "unknown", spawnResult, strerror(spawnResult), runtimeBuild ?: "<unavailable>", runtimeBuildResult,
-            runtimeBuildResult == 0 ? "ok" : strerror(runtimeBuildResult)]);
-        free(failureStage);
-        free(runtimeBuild);
-        return spawnResult;
-    }
-    free(failureStage);
-
-    NSMutableString *pending = [NSMutableString string];
-    char buffer[2048];
-    ssize_t bytesRead = 0;
-    while ((bytesRead = read(outputPipe[0], buffer, sizeof(buffer))) > 0) {
-        NSString *chunk = [[NSString alloc] initWithBytes:buffer length:(NSUInteger)bytesRead encoding:NSUTF8StringEncoding];
-        if (!chunk) chunk = [[NSString alloc] initWithBytes:buffer length:(NSUInteger)bytesRead encoding:NSASCIIStringEncoding];
-        if (!chunk) continue;
-        [pending appendString:chunk];
-        while (YES) {
-            NSRange newline = [pending rangeOfString:@"\n"];
-            if (newline.location == NSNotFound) break;
-            NSString *line = [pending substringToIndex:newline.location];
-            [pending deleteCharactersInRange:NSMakeRange(0, newline.location + 1)];
-            RHSendInstallLog(line);
-        }
-    }
-    close(outputPipe[0]);
-    if (pending.length) RHSendInstallLog(pending);
-
-    int waitStatus = 0;
-    if (waitpid(pid, &waitStatus, 0) < 0) return errno;
-    if (WIFEXITED(waitStatus)) return WEXITSTATUS(waitStatus);
-    if (WIFSIGNALED(waitStatus)) return 128 + WTERMSIG(waitStatus);
-    return ECHILD;
+    // jbctl pins the inherited root credentials before waiting for the app
+    // to restore its own credentials and sandbox, then replaces itself here.
+    NSMutableArray<NSString *> *jbctlArguments = [NSMutableArray arrayWithObjects:@"internal", @"exec_command", nil];
+    [jbctlArguments addObjectsFromArray:arguments];
+    return [[DOEnvironmentManager sharedManager] spawnJbctlAsRootWithArgs:jbctlArguments outputHandler:^(NSString *line) {
+        RHSendInstallLog(line);
+    }];
 }
 
 static BOOL RHStatusContainsInstalledPackage(NSString *packageName, NSString *architecture)
