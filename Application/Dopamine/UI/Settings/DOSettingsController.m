@@ -492,7 +492,7 @@ static void RHInstallFridaFromURL(NSURL *url)
             packageInstalled = RHStatusContainsInstalledPackage(@"re.frida.server", @"iphoneos-arm64e");
             serverPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/sbin/frida-server")];
             launchDaemonPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/Library/LaunchDaemons/re.frida.server.plist")];
-        }];
+        });
         if (copied && installResult == 0 && packageInstalled && serverPresent && launchDaemonPresent) {
             RHSendInstallLog(@"检测通过：re.frida.server、frida-server 与 LaunchDaemon 均已安装");
             RHSendInstallLog(@"RESULT: SUCCESS");
@@ -1158,7 +1158,7 @@ static void RHInstallFridaFromURL(NSURL *url)
 	__block NSString *diagnostic = nil;
     RHRunRootUnsandboxed(^{
         diagnostic = RHBuildPackageDiagnostic();
-    }];
+    });
 
     if (!diagnostic.length) {
         diagnostic = @"Dopamine RootHide package diagnostic\nNo jailbreak root was available.\n";
