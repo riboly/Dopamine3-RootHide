@@ -4,6 +4,7 @@
 #include <mach-o/dyld.h>
 #include <sys/param.h>
 #include <sys/mount.h>
+#include <sys/wait.h>
 #include <sandbox.h>
 #include <paths.h>
 #include <sys/stat.h>
@@ -187,8 +188,14 @@ static int spawn_exec_hook_common(bool isExec,
 	}
 
 	bool personaFixNeedsResume = true;
+	bool personaFixRequested = false;
 	int personaFixUid = -1;
 	int personaFixGid = -1;
+	short personaOriginalSpawnFlags = 0;
+	bool personaSpawnFlagsChanged = false;
+	struct _posix_spawn_persona_info *personaInfoToRestore = NULL;
+	uid_t personaOriginalUid = 0;
+	gid_t personaOriginalGid = 0;
 	posix_spawnattr_t attr = NULL;
 	if (desc) attr = desc->attrp;
 
@@ -309,6 +316,12 @@ static int spawn_exec_hook_common(bool isExec,
 				}
 
 				if (personaFixUid == 0 || personaFixGid == 0) {
+					personaFixRequested = true;
+					personaInfoToRestore = personaInfo;
+					personaOriginalUid = personaInfo->pspi_uid;
+					personaOriginalGid = personaInfo->pspi_gid;
+					personaOriginalSpawnFlags = flags;
+
 					// Revert any request to become root back to mobile
 					// Otherwise posix_spawn will straight up fail
 					if (personaFixUid == 0) personaInfo->pspi_uid = 501;
@@ -318,7 +331,13 @@ static int spawn_exec_hook_common(bool isExec,
 						personaFixNeedsResume = false;
 					}
 					else {
-						posix_spawnattr_setflags(&attr, flags | POSIX_SPAWN_START_SUSPENDED);
+						int suspendResult = posix_spawnattr_setflags(&attr, flags | POSIX_SPAWN_START_SUSPENDED);
+						if (suspendResult != 0) {
+							personaInfo->pspi_uid = personaOriginalUid;
+							personaInfo->pspi_gid = personaOriginalGid;
+							return suspendResult;
+						}
+						personaSpawnFlagsChanged = true;
 					}
 				}
 			}
@@ -385,11 +404,39 @@ static int spawn_exec_hook_common(bool isExec,
 		envbuf_free(envc);
 	}
 
-	if (personaFixUid == 0 || personaFixGid == 0 && childPid != -1) {
-		jbclient_fork_fix(childPid);
-		if (personaFixNeedsResume) {
-			kill(childPid, SIGCONT);
+	if (personaInfoToRestore) {
+		personaInfoToRestore->pspi_uid = personaOriginalUid;
+		personaInfoToRestore->pspi_gid = personaOriginalGid;
+	}
+	if (personaSpawnFlagsChanged) {
+		(void)posix_spawnattr_setflags(&attr, personaOriginalSpawnFlags);
+	}
+
+	if (r != 0 || !personaFixRequested) return r;
+	if (childPid <= 0) return ECHILD;
+
+	int personaResult = jbclient_persona_fix(childPid, personaFixUid, personaFixGid);
+	if (personaResult != 0) {
+		os_log_error(OS_LOG_DEFAULT,
+			"Persona root fix failed child=%d uid=%d gid=%d result=%d path=%{public}s",
+			childPid, personaFixUid, personaFixGid, personaResult, path);
+		if (kill(childPid, SIGKILL) == 0) {
+			while (waitpid(childPid, NULL, 0) < 0 && errno == EINTR) {}
 		}
+		else {
+			(void)waitpid(childPid, NULL, WNOHANG);
+		}
+		return personaResult > 0 ? personaResult : EACCES;
+	}
+	if (personaFixNeedsResume && kill(childPid, SIGCONT) != 0) {
+		int resumeError = errno ?: EIO;
+		if (kill(childPid, SIGKILL) == 0) {
+			while (waitpid(childPid, NULL, 0) < 0 && errno == EINTR) {}
+		}
+		else {
+			(void)waitpid(childPid, NULL, WNOHANG);
+		}
+		return resumeError;
 	}
 
 	return r;

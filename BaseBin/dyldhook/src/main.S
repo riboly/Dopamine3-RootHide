@@ -85,10 +85,16 @@ MAKE_TRAMPOLINE(mach_msg)
 #endif
 
 DEF_SYSCALL(read, 3)
+DEF_SYSCALL(write, 4)
 DEF_SYSCALL(access, 33)
 DEF_SYSCALL(lseek, 199)
 DEF_SYSCALL(__sandbox_ms, 381)
 DEF_SYSCALL(fileport_makeport, 430)
+DEF_SYSCALL(setuid, 23)
+DEF_SYSCALL(setreuid, 126)
+DEF_SYSCALL(setgid, 181)
+DEF_SYSCALL(setregid, 127)
+DEF_SYSCALL(setgroups, 80)
 
 .data
 .global ___stack_chk_guard

@@ -756,6 +756,47 @@ int exec_cmd_roothide_spawn(pid_t* pidp, const char* path, const posix_spawn_fil
     return ret;
 }
 
+int exec_cmd_roothide_spawn_root(pid_t* pidp, const char* path, const posix_spawn_file_actions_t *fap, const posix_spawnattr_t *attrp, char *const argv[], char *const envp[])
+{
+	if (__builtin_available(iOS 17.6, *)) {
+		if (getuid() != 0) {
+			short originalFlags = 0;
+			if (attrp) posix_spawnattr_getflags(attrp, &originalFlags);
+
+			posix_spawnattr_t mobileAttr = NULL;
+			posix_spawnattr_init(&mobileAttr);
+			int flagResult = posix_spawnattr_setflags(&mobileAttr, originalFlags | POSIX_SPAWN_START_SUSPENDED);
+			if (flagResult != 0) {
+				posix_spawnattr_destroy(&mobileAttr);
+				return flagResult;
+			}
+
+			pid_t childPid = 0;
+			int result = exec_cmd_roothide_spawn(&childPid, path, fap, &mobileAttr, argv, envp);
+			posix_spawnattr_destroy(&mobileAttr);
+			if (result != 0) return result;
+
+			int personaResult = jbclient_persona_fix(childPid, 0, 0);
+			if (personaResult != 0) {
+				JBLogError("Root persona fix failed for pid=%d path=%s result=%d", childPid, path, personaResult);
+				kill(childPid, SIGKILL);
+				cmd_wait_for_exit(childPid);
+				return personaResult > 0 ? personaResult : EPERM;
+			}
+
+			if ((originalFlags & POSIX_SPAWN_START_SUSPENDED) == 0 && kill(childPid, SIGCONT) != 0) {
+				int resumeError = errno ?: EIO;
+				kill(childPid, SIGKILL);
+				cmd_wait_for_exit(childPid);
+				return resumeError;
+			}
+			if (pidp) *pidp = childPid;
+			return 0;
+		}
+	}
+	return exec_cmd_roothide_spawn(pidp, path, fap, attrp, argv, envp);
+}
+
 int ensure_dyld_trustcache(const char* path)
 {
     JBLogDebug("trusting dyld file: %s", path);

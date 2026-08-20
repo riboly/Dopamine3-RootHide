@@ -218,7 +218,7 @@ static int RHRunInstallCommand(NSArray<NSString *> *arguments)
     posix_spawnattr_set_persona_gid_np(&attributes, 0);
 
     pid_t pid = 0;
-    int spawnResult = exec_cmd_roothide_spawn(&pid, argv[0], &actions, &attributes, argv, environ);
+    int spawnResult = exec_cmd_roothide_spawn_root(&pid, argv[0], &actions, &attributes, argv, environ);
     posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
     close(outputPipe[1]);
@@ -1055,10 +1055,7 @@ static void RHInstallFridaFromURL(NSURL *url)
 
 - (void)exportRootHidePackageDiagnosticsPressed
 {
-    // Resolve the app container before entering the root/unsandboxed context.
-    // NSHomeDirectory() may refer to root's home after credentials are changed.
-    NSString *documentsPath = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    __block NSString *diagnostic = nil;
+	__block NSString *diagnostic = nil;
     DOEnvironmentManager *environmentManager = [DOEnvironmentManager sharedManager];
     [environmentManager runUnsandboxed:^{
         diagnostic = RHBuildPackageDiagnostic();
@@ -1068,7 +1065,7 @@ static void RHInstallFridaFromURL(NSURL *url)
         diagnostic = @"Dopamine RootHide package diagnostic\nNo jailbreak root was available.\n";
     }
 
-    NSString *path = [documentsPath stringByAppendingPathComponent:@"RootHide-package-diagnostic.txt"];
+	NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"RootHide-package-diagnostic.txt"];
     NSError *error = nil;
     if (![diagnostic writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Log_Error") message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];

@@ -13,6 +13,8 @@
 #include <libjailbreak/codesign.h>
 
 #include <signal.h>
+#include <sys/param.h>
+#include <sys/proc.h>
 #include <libjailbreak/roothider.h>
 
 /*
@@ -453,6 +455,103 @@ static int systemwide_cs_revalidate(audit_token_t *callerToken)
 	return -1;
 }
 
+// iOS 17.6+ rejects a non-root caller's direct persona 99 -> uid 0 spawn.
+// The caller therefore starts the child suspended as mobile and asks launchd's
+// kernel-capable server to replace its credentials before it is resumed.
+static int systemwide_persona_fix(audit_token_t *callerToken, int childPid, uid_t overwriteUid, gid_t overwriteGid)
+{
+	xpc_object_t personaMgmtVal = xpc_copy_entitlement_for_token("com.apple.private.persona-mgmt", callerToken);
+	bool hasPersonaMgmtEntitlement = false;
+	if (personaMgmtVal) {
+		if (xpc_get_type(personaMgmtVal) == XPC_TYPE_INT64) {
+			hasPersonaMgmtEntitlement = xpc_int64_get_value(personaMgmtVal) == 1;
+		}
+		else if (xpc_get_type(personaMgmtVal) == XPC_TYPE_UINT64) {
+			hasPersonaMgmtEntitlement = xpc_uint64_get_value(personaMgmtVal) == 1;
+		}
+		else if (xpc_get_type(personaMgmtVal) == XPC_TYPE_BOOL) {
+			hasPersonaMgmtEntitlement = xpc_bool_get_value(personaMgmtVal);
+		}
+		xpc_release(personaMgmtVal);
+	}
+	if (!hasPersonaMgmtEntitlement) return EACCES;
+	if (childPid <= 0) return EINVAL;
+
+	pid_t callerPid = audit_token_to_pid(*callerToken);
+	if (callerPid <= 0) return EINVAL;
+	uint64_t callerProc = proc_find(callerPid);
+	uint64_t childProc = proc_find(childPid);
+	if (!callerProc || !childProc) {
+		if (childProc) proc_rele(childProc);
+		if (callerProc) proc_rele(callerProc);
+		return ESRCH;
+	}
+
+	int result = 0;
+	if (kread_ptr(childProc + koffsetof(proc, pptr)) != callerProc) {
+		result = EACCES;
+		goto out;
+	}
+
+	struct proc_bsdinfo childInfo = {0};
+	if (proc_pidinfo(childPid, PROC_PIDTBSDINFO, 0, &childInfo, sizeof(childInfo)) != sizeof(childInfo)) {
+		result = ESRCH;
+		goto out;
+	}
+	if (childInfo.pbi_status != SSTOP) {
+		result = EBUSY;
+		goto out;
+	}
+
+	char childProcPath[4 * MAXPATHLEN] = {0};
+	if (proc_pidpath(childPid, childProcPath, sizeof(childProcPath)) <= 0) {
+		result = ESRCH;
+		goto out;
+	}
+
+	uint64_t childUcred = proc_ucred(childProc);
+	if (!childUcred) {
+		result = EFAULT;
+		goto out;
+	}
+
+	gid_t groups[NGROUPS_MAX] = {0};
+	if (kreadbuf(childUcred + koffsetof(ucred, groups), groups, sizeof(groups)) != 0) {
+		result = EIO;
+		goto out;
+	}
+
+	uid_t uid = (uid_t)kread32(childUcred + koffsetof(ucred, uid));
+	gid_t gid = groups[0];
+	uid_t ruid = (uid_t)kread32(childUcred + koffsetof(ucred, ruid));
+	gid_t rgid = (gid_t)kread32(childUcred + koffsetof(ucred, rgid));
+	uid_t originalUid = uid;
+	gid_t originalGid = gid;
+
+	if (overwriteUid != (uid_t)-1) {
+		uid = overwriteUid;
+	}
+	if (overwriteGid != (gid_t)-1) {
+		gid = overwriteGid;
+	}
+
+	if (originalUid != uid || originalGid != gid) {
+		if (originalGid != gid) groups[0] = gid;
+		result = proc_ucred_update_content(childProc, childProcPath, uid, gid, uid, gid, groups);
+		if (result != 0) goto out;
+	}
+	if (overwriteUid != (uid_t)-1) kwrite32(childProc + koffsetof(proc, svuid), uid);
+	if (overwriteGid != (gid_t)-1) kwrite32(childProc + koffsetof(proc, svgid), gid);
+
+out:
+	if (result != 0) {
+		JBLogError("Persona fix failed caller=%d child=%d result=%d", callerPid, childPid, result);
+	}
+	proc_rele(childProc);
+	proc_rele(callerProc);
+	return result;
+}
+
 struct jbserver_domain gSystemwideDomain = {
 	.permissionHandler = roothide_domain_allowed,
 	.actions = {
@@ -522,6 +621,17 @@ struct jbserver_domain gSystemwideDomain = {
 			.args = (jbserver_arg[]){
 				{ .name = "key", .type = JBS_TYPE_STRING, .out = false },
 				{ .name = "value", .type = JBS_TYPE_XPC_GENERIC, .out = true },
+			},
+		},
+		// JBS_SYSTEMWIDE_PERSONA_FIX
+		{
+			.handler = systemwide_persona_fix,
+			.args = (jbserver_arg[]) {
+				{ .name = "caller-token", .type = JBS_TYPE_CALLER_TOKEN, .out = false },
+				{ .name = "child-pid", .type = JBS_TYPE_UINT64, .out = false },
+				{ .name = "overwrite-uid", .type = JBS_TYPE_UINT64, .out = false },
+				{ .name = "overwrite-gid", .type = JBS_TYPE_UINT64, .out = false },
+				{ 0 },
 			},
 		},
 		{ 0 },

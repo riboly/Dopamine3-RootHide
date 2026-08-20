@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/param.h>
 #include <sandbox.h>
 #include <libjailbreak/jbclient_mach.h>
 
@@ -67,6 +68,73 @@ void dyldhook_perform_checkin(void)
 
 mach_port_t mach_task_self_ = MACH_PORT_NULL;
 
+static int simple_atoi(const char *value)
+{
+	bool negative = value[0] == '-';
+	if (negative) value++;
+
+	int result = 0;
+	while (*value) {
+		if (*value >= '0' && *value <= '9') {
+			result = (result * 10) + (*value - '0');
+		}
+		value++;
+	}
+	return negative ? -result : result;
+}
+
+static void dyldhook_apply_requested_identity(uintptr_t argc, char **argv, char **envp)
+{
+	if (_simple_getenv(envp, "DYLD_HOOK_SETUID") == NULL) return;
+
+	int uid = 0, gid = 0, ruid = 0, rgid = 0, fd = -1;
+	gid_t groups[NGROUPS_MAX] = {0};
+	for (int i = 1; i < argc; i++) {
+		int remaining = (int)argc - i - 1;
+		if (!strcmp(argv[i], "--fd")) {
+			if (remaining < 1) break;
+			fd = simple_atoi(argv[++i]);
+		}
+		else if (!strcmp(argv[i], "--uid")) {
+			if (remaining < 1) break;
+			uid = simple_atoi(argv[++i]);
+		}
+		else if (!strcmp(argv[i], "--ruid")) {
+			if (remaining < 1) break;
+			ruid = simple_atoi(argv[++i]);
+		}
+		else if (!strcmp(argv[i], "--gid")) {
+			if (remaining < 1) break;
+			gid = simple_atoi(argv[++i]);
+		}
+		else if (!strcmp(argv[i], "--rgid")) {
+			if (remaining < 1) break;
+			rgid = simple_atoi(argv[++i]);
+		}
+		else if (!strcmp(argv[i], "--groups")) {
+			if (remaining < NGROUPS_MAX) break;
+			for (int groupIndex = 0; groupIndex < NGROUPS_MAX; groupIndex++) {
+				groups[groupIndex] = simple_atoi(argv[++i]);
+			}
+		}
+	}
+	if (fd < 0) return;
+
+	setgid(gid);
+	setgid(gid);
+	setregid(rgid, -1);
+	int groupCount = 0;
+	while (groupCount < NGROUPS_MAX && groups[groupCount] != (gid_t)-1) groupCount++;
+	setgroups(groupCount, groups);
+	setuid(uid);
+	setuid(uid);
+	setreuid(ruid, -1);
+
+	const uint8_t ready = 0x42;
+	write(fd, &ready, sizeof(ready));
+	__asm("b .");
+}
+
 void mach_init_4real(void)
 {
 	extern void mach_init(void);
@@ -91,7 +159,10 @@ void dyldhook_init(uintptr_t kernelParams)
 
 	// Walk kernelParams to get envp
 	uintptr_t argc = *(uintptr_t *)(kernelParams + sizeof(void *));
+	char **argv = (char **)(kernelParams + sizeof(void *) + sizeof(argc));
 	char **envp = (char **)(kernelParams + sizeof(void *) + sizeof(argc) + (sizeof(const char *) * argc) + sizeof(void *));
+
+	dyldhook_apply_requested_identity(argc, argv, envp);
 
 	// If DYLD_INSERT_LIBRARIES is not set or does not contain systemhook, bail out
 	const char *insertLibrariesVar = _simple_getenv(envp, "DYLD_INSERT_LIBRARIES");

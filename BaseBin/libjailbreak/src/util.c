@@ -18,6 +18,9 @@
 #include <mach-o/dyld_images.h>
 #include <mach-o/getsect.h>
 #include <dyld_cache_format.h>
+#include <sys/param.h>
+#include <sys/wait.h>
+#include <poll.h>
 extern char **environ;
 
 #include "roothider.h"
@@ -680,7 +683,9 @@ int __exec_cmd_internal_va(bool suspended, bool root, bool waitForExit, pid_t *p
 	}
 
 	pid_t spawnedPid = 0;
-	int spawnError = exec_cmd_roothide_spawn(&spawnedPid, binary, NULL, &attr, (char *const *)argv, envToUse);
+	int spawnError = root ?
+		exec_cmd_roothide_spawn_root(&spawnedPid, binary, NULL, &attr, (char *const *)argv, envToUse) :
+		exec_cmd_roothide_spawn(&spawnedPid, binary, NULL, &attr, (char *const *)argv, envToUse);
 	if (attr) posix_spawnattr_destroy(&attr);
 	if (spawnError != 0) return spawnError;
 
@@ -789,6 +794,150 @@ int jbctl_earlyboot(mach_port_t earlyBootServer, ...)
 	posix_spawnattr_destroy(&attr);
 	if (r != 0) return r;
 	return cmd_wait_for_exit(spawnedPid);
+}
+
+void proc_ucred_update(uint64_t proc, uint64_t newUcred)
+{
+	if (gSystemInfo.kernelStruct.proc_ro.exists) {
+		uint64_t proc_ro = kread_ptr(proc + koffsetof(proc, proc_ro));
+		kwrite64(proc_ro + koffsetof(proc_ro, ucred), newUcred);
+	}
+	else {
+		kwrite_ptr(proc + koffsetof(proc, ucred), newUcred, 0x84E8);
+	}
+}
+
+static void proc_copy_ucred(uint64_t procCopyFrom, uint64_t procCopyTo)
+{
+	uint64_t ucredToCopy = proc_ucred(procCopyFrom);
+	uint64_t originalUcred = proc_ucred(procCopyTo);
+	if (!ucredToCopy || !originalUcred || ucredToCopy == originalUcred) return;
+
+	// Publish a fully referenced credential before releasing the old one.
+	kauth_cred_ref(ucredToCopy);
+	kauth_cred_hold(ucredToCopy);
+	proc_ucred_update(procCopyTo, ucredToCopy);
+	kauth_cred_drop(originalUcred);
+	kauth_cred_unref(originalUcred);
+}
+
+// Build a credential-bearing helper process and copy its ucred onto the
+// suspended target. Direct ucred field writes are rejected or unstable on
+// newer iOS releases, so this follows the upstream Dopamine workaround.
+static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX])
+{
+	int comPipe[2] = {-1, -1};
+	if (pipe(comPipe) != 0) return -1;
+
+	posix_spawn_file_actions_t actions = NULL;
+	int result = posix_spawn_file_actions_init(&actions);
+	if (result == 0) result = posix_spawn_file_actions_adddup2(&actions, comPipe[1], 3);
+	if (result == 0) result = posix_spawn_file_actions_addclose(&actions, comPipe[0]);
+	if (result == 0 && comPipe[1] != 3) result = posix_spawn_file_actions_addclose(&actions, comPipe[1]);
+	if (result != 0) {
+		if (actions) posix_spawn_file_actions_destroy(&actions);
+		close(comPipe[0]);
+		close(comPipe[1]);
+		return -1;
+	}
+
+	char uidString[12], gidString[12], ruidString[12], rgidString[12];
+	snprintf(uidString, sizeof(uidString), "%d", uid);
+	snprintf(gidString, sizeof(gidString), "%d", gid);
+	snprintf(ruidString, sizeof(ruidString), "%d", ruid);
+	snprintf(rgidString, sizeof(rgidString), "%d", rgid);
+
+	char groupStrings[NGROUPS_MAX][12];
+	for (int i = 0; i < NGROUPS_MAX; i++) {
+		snprintf(groupStrings[i], sizeof(groupStrings[i]), "%d", groups[i]);
+	}
+
+	const char *argv[1 + 6 + 5 + NGROUPS_MAX + 1];
+	int index = 0;
+	argv[index++] = procPath;
+	argv[index++] = "--fd";
+	argv[index++] = "3";
+	argv[index++] = "--uid";
+	argv[index++] = uidString;
+	argv[index++] = "--ruid";
+	argv[index++] = ruidString;
+	argv[index++] = "--gid";
+	argv[index++] = gidString;
+	argv[index++] = "--rgid";
+	argv[index++] = rgidString;
+	argv[index++] = "--groups";
+	for (int i = 0; i < NGROUPS_MAX; i++) argv[index++] = groupStrings[i];
+	argv[index] = NULL;
+
+	const char *envp[] = {
+		"_SafeMode=1",
+		"DYLD_HOOK_SETUID=1",
+		NULL,
+	};
+
+	pid_t childPid = 0;
+	result = posix_spawn(&childPid, procPath, &actions, NULL, (char *const *)argv, (char *const *)envp);
+	posix_spawn_file_actions_destroy(&actions);
+	close(comPipe[1]);
+	if (result != 0) {
+		close(comPipe[0]);
+		return -1;
+	}
+
+	struct pollfd pollFd = {
+		.fd = comPipe[0],
+		.events = POLLIN,
+	};
+	do {
+		result = poll(&pollFd, 1, 10000);
+	} while (result < 0 && errno == EINTR);
+	uint8_t ready = 0;
+	if (result <= 0 || (pollFd.revents & (POLLIN | POLLHUP)) == 0 || read(comPipe[0], &ready, sizeof(ready)) != sizeof(ready) || ready != 0x42) {
+		close(comPipe[0]);
+		kill(childPid, SIGKILL);
+		cmd_wait_for_exit(childPid);
+		return -1;
+	}
+	close(comPipe[0]);
+	return childPid;
+}
+
+int proc_ucred_update_content(uint64_t proc, const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX])
+{
+	if (__builtin_available(iOS 17.0, *)) {
+		int childPid = target_proc_with_ucred(procPath, uid, gid, ruid, rgid, groups);
+		if (childPid == -1) return -1;
+
+		uint64_t childProc = proc_find(childPid);
+		if (!childProc) {
+			kill(childPid, SIGKILL);
+			cmd_wait_for_exit(childPid);
+			return -1;
+		}
+		proc_copy_ucred(childProc, proc);
+		proc_rele(childProc);
+		kill(childPid, SIGKILL);
+		cmd_wait_for_exit(childPid);
+	}
+	else {
+		uint64_t ucred = proc_ucred(proc);
+		kwrite32(ucred + koffsetof(ucred, svuid), uid);
+		kwrite32(ucred + koffsetof(ucred, uid), uid);
+		kwrite32(ucred + koffsetof(ucred, svgid), gid);
+		kwrite32(ucred + koffsetof(ucred, groups), gid);
+	}
+
+	if (gSystemInfo.kernelStruct.proc_ro.exists) {
+		uint64_t proc_ro = kread_ptr(proc + koffsetof(proc, proc_ro));
+		if (koffsetof(proc_ro, task_tokens)) {
+			uint64_t auditToken = proc_ro + koffsetof(proc_ro, task_tokens) + koffsetof(task_token_ro_data, audit_token);
+			kwrite32(auditToken + 4, uid);
+			kwrite32(auditToken + 8, gid);
+			kwrite32(auditToken + 12, ruid);
+			kwrite32(auditToken + 16, rgid);
+		}
+	}
+	return 0;
 }
 
 void killall(const char *executablePath, int signal)
