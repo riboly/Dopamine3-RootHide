@@ -416,24 +416,37 @@ char* generate_sandbox_extensions(audit_token_t *processToken, bool writable)
 {
     char* sandboxExtensionsOut=NULL;
 
-    char jbroot_base[PATH_MAX];
-    char jbroot_writable[PATH_MAX];
-    snprintf(jbroot_base, sizeof(jbroot_base), "/private/var/containers/Bundle/Application/.jbroot-%016llX/", jbinfo(jbrand));
-    snprintf(jbroot_writable, sizeof(jbroot_writable), "/private/var/mobile/Containers/Shared/AppGroup/.jbroot-%016llX/", jbinfo(jbrand));
+    char jbroot_base[PATH_MAX] = {0};
+    char jbroot_base_private[PATH_MAX] = {0};
+    char jbroot_writable[PATH_MAX] = {0};
+    char jbroot_writable_private[PATH_MAX] = {0};
+    const char *currentJbrootPath = jbinfo(rootPath);
+    if (currentJbrootPath && currentJbrootPath[0]) {
+        strlcpy(jbroot_base, currentJbrootPath, sizeof(jbroot_base));
+        strlcat(jbroot_base, "/", sizeof(jbroot_base));
+    }
+    else {
+        snprintf(jbroot_base, sizeof(jbroot_base), "/var/containers/Bundle/Application/.jbroot-%016llX/", jbinfo(jbrand));
+    }
+    snprintf(jbroot_base_private, sizeof(jbroot_base_private), "/private/var/containers/Bundle/Application/.jbroot-%016llX/", jbinfo(jbrand));
+    snprintf(jbroot_writable, sizeof(jbroot_writable), "/var/mobile/Containers/Shared/AppGroup/.jbroot-%016llX/", jbinfo(jbrand));
+    snprintf(jbroot_writable_private, sizeof(jbroot_writable_private), "/private/var/mobile/Containers/Shared/AppGroup/.jbroot-%016llX/", jbinfo(jbrand));
 
     char* fileclass = writable ? "com.apple.app-sandbox.read-write" : "com.apple.app-sandbox.read";
-    char *extension1 = sandbox_extension_issue_file_to_process(fileclass, jbroot_writable, 0, *processToken);
+    char *sandboxExtensionsArr[] = {
+        sandbox_extension_issue_file_to_process(fileclass, jbroot_writable, 0, *processToken),
+        sandbox_extension_issue_file_to_process(fileclass, jbroot_writable_private, 0, *processToken),
+        sandbox_extension_issue_file_to_process("com.apple.app-sandbox.read", jbroot_base, 0, *processToken),
+        sandbox_extension_issue_file_to_process("com.apple.app-sandbox.read", jbroot_base_private, 0, *processToken),
+        sandbox_extension_issue_file_to_process("com.apple.sandbox.executable", jbroot_base, 0, *processToken),
+        sandbox_extension_issue_file_to_process("com.apple.sandbox.executable", jbroot_base_private, 0, *processToken),
+    };
+    int sandboxExtensionsCount = sizeof(sandboxExtensionsArr) / sizeof(char *);
+    sandboxExtensionsOut = combine_strings('|', sandboxExtensionsArr, sandboxExtensionsCount);
 
-    char *extension2 = sandbox_extension_issue_file_to_process("com.apple.app-sandbox.read", jbroot_base, 0, *processToken);
-    char *extension3 = sandbox_extension_issue_file_to_process("com.apple.sandbox.executable", jbroot_base, 0, *processToken);
-
-    if(extension1 && extension2 && extension3) {
-        asprintf(&sandboxExtensionsOut, "%s|%s|%s", extension1, extension2, extension3);
+    for (int i = 0; i < sandboxExtensionsCount; i++) {
+        if (sandboxExtensionsArr[i]) free(sandboxExtensionsArr[i]);
     }
-    
-    if (extension1) free(extension1);
-    if (extension2) free(extension2);
-    if (extension3) free(extension3);
 
     return sandboxExtensionsOut;
 }
