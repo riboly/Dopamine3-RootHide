@@ -12,6 +12,7 @@
 #include <libjailbreak/primitives.h>
 #include <libjailbreak/codesign.h>
 
+#include <errno.h>
 #include <signal.h>
 #include <sys/param.h>
 #include <sys/proc.h>
