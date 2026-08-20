@@ -412,6 +412,37 @@ void ensure_jbroot_symlink(const char* filepath)
 	}
 }
 
+static char *combine_sandbox_extension_tokens(char separator, char **components, int count)
+{
+    if (count <= 0) return NULL;
+
+    size_t outLength = 1;
+    int validCount = 0;
+    for (int i = 0; i < count; i++) {
+        if (!components[i]) continue;
+        outLength += strlen(components[i]);
+        if (validCount > 0) outLength++;
+        validCount++;
+    }
+    if (validCount == 0) return NULL;
+
+    char *outString = malloc(outLength);
+    if (!outString) return NULL;
+    outString[0] = '\0';
+
+    bool isFirst = true;
+    for (int i = 0; i < count; i++) {
+        if (!components[i]) continue;
+        if (!isFirst) {
+            char separatorString[2] = { separator, 0 };
+            strlcat(outString, separatorString, outLength);
+        }
+        strlcat(outString, components[i], outLength);
+        isFirst = false;
+    }
+    return outString;
+}
+
 char* generate_sandbox_extensions(audit_token_t *processToken, bool writable)
 {
     char* sandboxExtensionsOut=NULL;
@@ -442,7 +473,7 @@ char* generate_sandbox_extensions(audit_token_t *processToken, bool writable)
         sandbox_extension_issue_file_to_process("com.apple.sandbox.executable", jbroot_base_private, 0, *processToken),
     };
     int sandboxExtensionsCount = sizeof(sandboxExtensionsArr) / sizeof(char *);
-    sandboxExtensionsOut = combine_strings('|', sandboxExtensionsArr, sandboxExtensionsCount);
+    sandboxExtensionsOut = combine_sandbox_extension_tokens('|', sandboxExtensionsArr, sandboxExtensionsCount);
 
     for (int i = 0; i < sandboxExtensionsCount; i++) {
         if (sandboxExtensionsArr[i]) free(sandboxExtensionsArr[i]);
