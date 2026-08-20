@@ -1,6 +1,8 @@
 #include "jbclient_xpc.h"
 #include "jbclient_mach.h"
 #include "jbserver.h"
+#include <errno.h>
+#include <string.h>
 #include <dispatch/dispatch.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
@@ -288,7 +290,22 @@ int jbclient_persona_fix(int childPid, uid_t overwriteUid, gid_t overwriteGid)
 		xpc_release(xreply);
 		return result;
 	}
-	return -1;
+	return ENOTSUP;
+}
+
+int jbclient_get_runtime_build(char **buildOut)
+{
+	if (!buildOut) return EINVAL;
+	*buildOut = NULL;
+
+	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_SYSTEMWIDE, JBS_SYSTEMWIDE_RUNTIME_INFO, NULL);
+	if (!xreply) return ENOTSUP;
+
+	int result = (int)xpc_dictionary_get_int64(xreply, "result");
+	const char *build = xpc_dictionary_get_string(xreply, "basebin-build");
+	if (result == 0 && build) *buildOut = strdup(build);
+	xpc_release(xreply);
+	return result ?: (*buildOut ? 0 : EPROTO);
 }
 
 int jbclient_platform_set_process_debugged(uint64_t pid, bool fullyDebugged)

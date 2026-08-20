@@ -10,6 +10,7 @@
 #import <Photos/Photos.h>
 #import <libjailbreak/util.h>
 #import <libjailbreak/jbroot.h>
+#import <libjailbreak/jbclient_xpc.h>
 #import <errno.h>
 #import <string.h>
 #import <sys/stat.h>
@@ -122,6 +123,14 @@ static NSString *RHBuildPackageDiagnostic(void)
     [output appendFormat:@"generated=%@\nuid=%d euid=%d gid=%d\n",
         [NSDate date], getuid(), geteuid(), getgid()];
 
+    NSString *appBuild = [[DOEnvironmentManager sharedManager] nightlyHash] ?: @"unknown";
+    char *runtimeBuild = NULL;
+    int runtimeBuildResult = jbclient_get_runtime_build(&runtimeBuild);
+    [output appendFormat:@"app_build=%@\nruntime_basebin_build=%s\nruntime_basebin_result=%d (%s)\n",
+        appBuild, runtimeBuild ?: "<unavailable>", runtimeBuildResult,
+        runtimeBuildResult == 0 ? "ok" : strerror(runtimeBuildResult)];
+    free(runtimeBuild);
+
     NSString *root = gSystemInfo.jailbreakInfo.rootPath ?
         [NSString stringWithUTF8String:gSystemInfo.jailbreakInfo.rootPath] : nil;
     [output appendFormat:@"jbroot=%@\n\n", root ?: @"<nil>"];
@@ -132,6 +141,9 @@ static NSString *RHBuildPackageDiagnostic(void)
         @"/.jbroot",
         @"/basebin/jbctl",
         @"/basebin/.version",
+        @"/basebin/.build",
+        @"/basebin/launchdhook.dylib",
+        @"/basebin/systemhook.dylib",
         @"/etc/apt/sources.list.d",
         @"/etc/apt/sileo.list.d",
         @"/var/lib/apt",
@@ -154,6 +166,8 @@ static NSString *RHBuildPackageDiagnostic(void)
     RHAppendDiagnosticAbsoluteStat(output, @"/Applications/RootHide.app/RootHide", @"/Applications/RootHide.app/RootHide (system)");
 
     NSArray<NSString *> *textSnapshots = @[
+        @"/basebin/.version",
+        @"/basebin/.build",
         @"/etc/apt/sources.list.d/default.sources",
         @"/etc/apt/sources.list.d/procursus.sources",
         @"/etc/apt/sources.list.d/sileo.sources",
@@ -227,7 +241,12 @@ static int RHRunInstallCommand(NSArray<NSString *> *arguments)
 
     if (spawnResult != 0) {
         close(outputPipe[0]);
-        RHSendInstallLog([NSString stringWithFormat:@"RootHide spawn 失败：%d (%s)", spawnResult, strerror(spawnResult)]);
+        char *runtimeBuild = NULL;
+        int runtimeBuildResult = jbclient_get_runtime_build(&runtimeBuild);
+        RHSendInstallLog([NSString stringWithFormat:@"RootHide spawn 失败：%d (%s)，运行中 basebin=%s，探测=%d (%s)",
+            spawnResult, strerror(spawnResult), runtimeBuild ?: "<unavailable>", runtimeBuildResult,
+            runtimeBuildResult == 0 ? "ok" : strerror(runtimeBuildResult)]);
+        free(runtimeBuild);
         return spawnResult;
     }
 

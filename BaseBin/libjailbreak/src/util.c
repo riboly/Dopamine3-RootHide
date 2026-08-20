@@ -828,7 +828,7 @@ static void proc_copy_ucred(uint64_t procCopyFrom, uint64_t procCopyTo)
 static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX])
 {
 	int comPipe[2] = {-1, -1};
-	if (pipe(comPipe) != 0) return -1;
+	if (pipe(comPipe) != 0) return -errno;
 
 	posix_spawn_file_actions_t actions = NULL;
 	int result = posix_spawn_file_actions_init(&actions);
@@ -839,7 +839,7 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 		if (actions) posix_spawn_file_actions_destroy(&actions);
 		close(comPipe[0]);
 		close(comPipe[1]);
-		return -1;
+		return -result;
 	}
 
 	char uidString[12], gidString[12], ruidString[12], rgidString[12];
@@ -882,7 +882,7 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 	close(comPipe[1]);
 	if (result != 0) {
 		close(comPipe[0]);
-		return -1;
+		return -result;
 	}
 
 	struct pollfd pollFd = {
@@ -893,11 +893,17 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 		result = poll(&pollFd, 1, 10000);
 	} while (result < 0 && errno == EINTR);
 	uint8_t ready = 0;
-	if (result <= 0 || (pollFd.revents & (POLLIN | POLLHUP)) == 0 || read(comPipe[0], &ready, sizeof(ready)) != sizeof(ready) || ready != 0x42) {
+	ssize_t readyLength = -1;
+	if (result > 0 && (pollFd.revents & (POLLIN | POLLHUP)) != 0) {
+		readyLength = read(comPipe[0], &ready, sizeof(ready));
+	}
+	if (result <= 0 || readyLength != sizeof(ready) || ready != 0x42) {
+		int helperError = result == 0 ? ETIMEDOUT : EPROTO;
+		if (result < 0) helperError = errno;
 		close(comPipe[0]);
 		kill(childPid, SIGKILL);
 		cmd_wait_for_exit(childPid);
-		return -1;
+		return -helperError;
 	}
 	close(comPipe[0]);
 	return childPid;
@@ -907,7 +913,7 @@ int proc_ucred_update_content(uint64_t proc, const char *procPath, uid_t uid, gi
 {
 	if (__builtin_available(iOS 17.0, *)) {
 		int childPid = target_proc_with_ucred(procPath, uid, gid, ruid, rgid, groups);
-		if (childPid == -1) return -1;
+		if (childPid < 0) return -childPid;
 
 		uint64_t childProc = proc_find(childPid);
 		if (!childProc) {

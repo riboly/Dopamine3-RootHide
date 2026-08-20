@@ -83,6 +83,7 @@ jailbreakd: .build .include libjailbreak
 	mkdir -p .build
 	cp -r _external/basebin/* .build
 	cp _external/basebin/.version .build
+	@printf '%s\n' "$(if $(COMMIT_HASH),$(COMMIT_HASH),unknown)" > .build/.build
 
 .include:
 	rm -rf .include

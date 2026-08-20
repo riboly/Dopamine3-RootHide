@@ -18,6 +18,10 @@
 #include <sys/proc.h>
 #include <libjailbreak/roothider.h>
 
+#ifndef BASEBIN_BUILD
+#define BASEBIN_BUILD "unknown"
+#endif
+
 /*
 bool gSystemwideDomainEnabled = true;
 void systemwide_domain_set_enabled(bool enabled)
@@ -553,6 +557,12 @@ out:
 	return result;
 }
 
+static int systemwide_runtime_info(char **basebinBuildOut)
+{
+	*basebinBuildOut = strdup(BASEBIN_BUILD);
+	return *basebinBuildOut ? 0 : ENOMEM;
+}
+
 struct jbserver_domain gSystemwideDomain = {
 	.permissionHandler = roothide_domain_allowed,
 	.actions = {
@@ -632,6 +642,14 @@ struct jbserver_domain gSystemwideDomain = {
 				{ .name = "child-pid", .type = JBS_TYPE_UINT64, .out = false },
 				{ .name = "overwrite-uid", .type = JBS_TYPE_UINT64, .out = false },
 				{ .name = "overwrite-gid", .type = JBS_TYPE_UINT64, .out = false },
+				{ 0 },
+			},
+		},
+		// JBS_SYSTEMWIDE_RUNTIME_INFO
+		{
+			.handler = systemwide_runtime_info,
+			.args = (jbserver_arg[]) {
+				{ .name = "basebin-build", .type = JBS_TYPE_STRING, .out = true },
 				{ 0 },
 			},
 		},
