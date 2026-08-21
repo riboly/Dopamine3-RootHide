@@ -44,6 +44,8 @@ CFDictionaryRef _CFPreferencesCopyMultipleWithContainer(CFArrayRef keysToFetch, 
 
 //char *_dirhelper(int a, char *dst, size_t size);
 
+static uint64_t gPinnedActivationUcred = 0;
+
 NSString *const JBErrorDomain = @"JBErrorDomain";
 typedef NS_ENUM(NSInteger, JBErrorCode) {
     JBErrorCodeFailedToFindKernel            = -1,
@@ -245,20 +247,45 @@ sets[idx] = NULL;
 - (NSError *)elevatePrivileges
 {
     uint64_t proc = proc_self();
-    uint64_t kernproc = proc_find(0);
-    if (!proc || !kernproc) {
+    uint64_t ucred = proc ? proc_ucred(proc) : 0;
+    if (!proc || !ucred) {
         return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:@"Failed to find credentials for privilege elevation"}];
     }
-
-    // Credentials are hash-keyed on iOS 18. Borrow the immutable kernel
-    // credential instead of changing UID/GID or the MAC label in place.
-    int copyResult = proc_copy_ucred(kernproc, proc);
-    if (copyResult != 0) {
-        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to copy root credentials: %d", copyResult]}];
+    uint64_t label = kread_ptr(ucred + koffsetof(ucred, label));
+    if (!label) {
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedUnsandbox userInfo:@{NSLocalizedDescriptionKey:@"Failed to find sandbox label for privilege elevation"}];
     }
 
+    // The first activation runs before launchdhook can create a donor credential.
+    // Pin this process' credential for the rest of the boot before changing its
+    // hash key. The bounded leak prevents XNU from ever retiring the mutated
+    // credential and is preferable to borrowing kernproc's full GUI identity.
+    if (gPinnedActivationUcred != ucred) {
+        int pinResult = kauth_cred_ref(ucred);
+        if (pinResult == 0) {
+            pinResult = kauth_cred_hold(ucred);
+            if (pinResult != 0) (void)kauth_cred_unref(ucred);
+        }
+        if (pinResult != 0) {
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to pin credentials for privilege elevation: %d", pinResult]}];
+        }
+        gPinnedActivationUcred = ucred;
+    }
+    if (proc_ucred(proc) != ucred) {
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:@"Credentials changed while preparing privilege elevation"}];
+    }
+
+    // Get uid 0. This credential must not be released after these writes.
     kwrite32(proc + koffsetof(proc, svuid), 0);
+    kwrite32(ucred + koffsetof(ucred, svuid), 0);
+    kwrite32(ucred + koffsetof(ucred, ruid), 0);
+    kwrite32(ucred + koffsetof(ucred, uid), 0);
+
+    // Get gid 0.
     kwrite32(proc + koffsetof(proc, svgid), 0);
+    kwrite32(ucred + koffsetof(ucred, rgid), 0);
+    kwrite32(ucred + koffsetof(ucred, svgid), 0);
+    kwrite32(ucred + koffsetof(ucred, groups), 0);
 
     // Add P_SUGID
     uint32_t flag = kread32(proc + koffsetof(proc, flag));
@@ -269,7 +296,10 @@ sets[idx] = NULL;
     
     if (getuid() != 0) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to get root, uid still %d", getuid()]}];
     if (getgid() != 0) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to get root, gid still %d", getgid()]}];
-    
+
+    // Unsandbox the pinned credential. Its MAC label is also part of the hash
+    // key, so it must remain pinned together with the POSIX identity above.
+    mac_label_set(label, 1, -1);
     NSError *error = nil;
     [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/var" error:&error];
     if (error) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedUnsandbox userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to unsandbox, /var does not seem accessible (%s)", error.description.UTF8String]}];
@@ -769,17 +799,12 @@ setenv("DYLD_INSERT_LIBRARIES", JBROOT_PATH("/basebin/systemhook.dylib"), 1);
     // newly uicache'd Sileo / RootHide apps.
     [self ensureDevModeEnabled];
 
-    // Guarantee root for rebootUserspace without mutating a hash-keyed ucred.
-    uint64_t proc = proc_self();
-    uint64_t kernproc = proc_find(0);
-    if (!proc || !kernproc || proc_copy_ucred(kernproc, proc) != 0) {
-        [[DOUIManager sharedInstance] sendLog:@"Failed to restore root credentials for userspace reboot" debug:YES];
+    // elevatePrivileges keeps the pinned activation credential until this app
+    // exits. Never replace a GUI process with kernproc's audit/MAC identity.
+    if (getuid() != 0 || geteuid() != 0 || getgid() != 0 || getegid() != 0) {
+        [[DOUIManager sharedInstance] sendLog:@"Root credentials were lost before userspace reboot" debug:YES];
         return;
     }
-    kwrite32(proc + koffsetof(proc, svuid), 0);
-    kwrite32(proc + koffsetof(proc, svgid), 0);
-    setgid(0);
-    setuid(0);
     usleep(200 * 1000);
 
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Rebooting Userspace") debug:NO];

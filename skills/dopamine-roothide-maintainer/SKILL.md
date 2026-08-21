@@ -26,14 +26,15 @@ logic.
 3. Compare device paths with `DOBootstrapper.m`, `DOEnvironmentManager.m`, `libjailbreak`, `launchdhook`, and `systemhook` ownership boundaries.
 4. For a kernel panic, classify memory pressure separately from object-lifecycle corruption. Match panic `item/linkage/traits` against the exact XNU build before changing kernel writes.
 5. For iOS 18 credential changes, treat `ucred_rw.crw_weak_ref` as a 32-bit `os_ref_atomic_t`. Never perform a raw weak `1 -> 0`; that transition requires `kauth_cred_retire()` and SMR hash removal.
-6. Do not modify a live shared `ucred` hash key in place on iOS 17+. UID/GID/groups, saved IDs, audit data, and MAC labels must come from a fully constructed donor credential or an immutable borrowed credential, published with balanced strong/weak references.
-7. Audit every credential path, not only the one present in the panic stack: initial privilege elevation, get/drop root, setuid check-in, root credential borrowing, sandbox changes, and finalization can share the same corrupted hash lifecycle.
-8. Make the smallest change that preserves user data and existing RootHide invariants.
-9. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
-10. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
-11. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
-12. Validate on the device. For persistence fixes, capture source file names and checksums before reboot, then compare them after reboot and reactivation.
-13. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
+6. Do not modify a live shared `ucred` hash key in place on iOS 17+. UID/GID/groups, saved IDs, audit data, and MAC labels must normally come from a fully constructed donor credential, published with balanced strong/weak references.
+7. Never replace a GUI app with `kernproc`'s complete credential: its audit session and MAC identity can make RunningBoard terminate the app. During first activation, before launchdhook can create a donor, the narrow fallback is to pin the app's current credential with both weak and strong references for the rest of that boot, verify the pointer is unchanged, then mutate only that pinned credential. Never release it or reuse this fallback for recurring daemon/service paths.
+8. Audit every credential path, not only the one present in the panic stack: initial privilege elevation, get/drop root, setuid check-in, root credential borrowing, sandbox changes, and finalization can share the same corrupted hash lifecycle.
+9. Make the smallest change that preserves user data and existing RootHide invariants.
+10. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
+11. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
+12. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
+13. Validate on the device. For persistence fixes, capture source file names and checksums before reboot, then compare them after reboot and reactivation.
+14. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
 
 ## Device Interpretation
 

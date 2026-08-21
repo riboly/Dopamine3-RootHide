@@ -482,4 +482,51 @@ basebin.tar SHA-256: de85bc4076693e0291ad832cce42e0338d32c094bfe213f2e3a2b0b3569
 - `UCRED-SMR-18A2` 存在于 `libjailbreak.dylib` 双切片；`RESPRING-IOS18-BBD1` 存在于 `systemhook.dylib`。
 - artifact ZIP、TIPA 和内层 `basebin.tar` 均可完整枚举和解包。
 
-3.0.24 当前是构建通过、待设备验证状态。不能仅凭构建与代码审查宣布 panic 已修复。
+3.0.24 的构建核验通过，但设备首次激活回归失败，不能交付或继续用于测试。
+
+## 14. 3.0.23 新 panic 与 3.0.24 激活回归
+
+### 3.0.23 新日志
+
+用户提供的有效目录：
+
+```text
+D:\LocalSend\21点13-21点29参数 月余环境3.0.23
+panic-base-2026-08-21-211339.ips
+panic-full-2026-08-21-212942.0002.ips
+```
+
+两次均为相同的 `ucred_rw` SMR 哈希删除失败：
+
+```text
+Unable to find item ... (linkage item+0x10) @smr.c:2831
+```
+
+21:13 日志的 Compressor 为 33% (OK)，panicked task 是 `sudo`；21:29 为 36% (OK)、`memoryPressure=false`，panicked task 是 `launchd`。因此不是内存爆满，也没有证据支持普通用户态内存泄漏；A1 仍遗漏了 credential hash key 原地突变。
+
+### 3.0.24 设备失败
+
+3.0.24 覆盖安装后，月余执行到 `Elevating Privileges` 附近时 Dopamine App 直接退出，手机没有重启或注销；重新打开重试仍复现。最高置信根因是首次激活把 GUI App 的 credential 整体替换为 `kernproc` credential。虽然该对象本身不可变，但它同时带入 kernel audit session 与 MAC identity，RunningBoard/launchd 可据此终止 GUI App。
+
+同一错误模式还存在于 3.0.24 的 `finalize`，且 `rebootUserspace` 可能经 `runUnsandboxed` 再次短暂借用 kernel credential。构建成功不能覆盖该设备回归结论。
+
+## 15. 3.0.25：首次激活 pinned credential 回退
+
+首次激活发生在 launchdhook 能提供 donor credential 之前。3.0.25 使用以下窄回退：
+
+1. 读取 Dopamine 自身当前 credential，不复制 `kernproc` credential。
+2. 在任何 UID/GID/MAC 写入前，同时增加 weak 与 strong 引用，并在写入前重新核对 `proc` 仍指向同一 credential。
+3. 每个 App 进程对同一 credential 只 pin 一次；该引用在本次开机周期内故意不释放，使突变后的 hash key 永远不会进入 `kauth_cred_retire()`。
+4. 恢复首次激活所需的 UID/GID、saved IDs、groups 和 sandbox label 修改；其他已激活环境的 `sudo`、`launchd`、setuid、get/drop-root 仍使用 A2 donor credential，不采用此回退。
+5. `finalize` 只验证 real/effective UID/GID 仍为 0，不再复制 kernel credential，也不再重复修改 hash key。
+6. `runUnsandboxed` 仅在 App 已为完整 root 身份且确实能枚举 `/private/var/root` 时复用当前激活身份；仅临时 UID 0 但仍受沙盒约束时继续走原有借用路径。
+
+该方案有意保留一组 credential 引用，完整手机重启后由内核回收；这是有上限的单次开机泄漏，用来换取避免 SMR panic。不得把它推广到循环调用、daemon 或任意目标进程。
+
+产物标记：
+
+```text
+UCRED-SMR-18A3
+```
+
+3.0.25 当前仍需完成 GitHub Actions 全量构建、产物核验和用户设备首次激活验证。在设备验证成功前不能宣布回归已修复。

@@ -8,7 +8,7 @@
 #include <errno.h>
 #include <stdatomic.h>
 
-static const char kUcredSmrFixMarker[] __attribute__((used)) = "UCRED-SMR-18A2";
+static const char kUcredSmrFixMarker[] __attribute__((used)) = "UCRED-SMR-18A3";
 
 uint64_t proc_find(pid_t pidToFind)
 {

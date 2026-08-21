@@ -325,7 +325,13 @@ extern char **environ;
 
 - (void)runUnsandboxed:(void (^)(void))unsandboxBlock
 {
-    if ([self isInstalledThroughTrollStore]) {
+    NSError *probeError = nil;
+    BOOL hasPinnedActivationIdentity =
+        getuid() == 0 && geteuid() == 0 && getgid() == 0 && getegid() == 0 &&
+        [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/private/var/root" error:&probeError] != nil;
+    if ([self isInstalledThroughTrollStore] || hasPinnedActivationIdentity) {
+        // Initial activation already owns a pinned root + unsandbox credential.
+        // Avoid replacing the GUI app with kernproc's complete identity.
         unsandboxBlock();
     }
     else if([self isJailbroken]) {
