@@ -1,6 +1,8 @@
 #include "common.h"
 #include "roothider.h"
+#include <crt_externs.h>
 #include <dirent.h>
+#include <grp.h>
 #include <limits.h>
 #include <mach-o/dyld.h>
 #include <os/log.h>
