@@ -9,7 +9,7 @@
 | 3.0.21 | 修复 RootHide setid donor 握手 | Sileo 源名称、更新、安装全部正常；Zebra 正常启动和使用 |
 | 3.0.22 | 修复重启后重新月余导致用户软件源丢失 | 用户已确认 `sileo.sources` 与 `roothide-release.sources` 生效，软件源持久化正常 |
 | 3.0.23 | A1：修复 iOS 18 `ucred` 引用宽度、最终 weak release 和异常 respring | 构建通过，但 21:00 的有效新版本回归仍出现同类 `smr.c:2831` panic，A1 已被设备证伪为不完整 |
-| 3.0.24 | A2：禁止 iOS 17+ 原地修改 credential hash key，统一安全复制/替换 | 代码与构建验证进行中，尚未完成设备稳定性回归 |
+| 3.0.24 | A2：禁止 iOS 17+ 原地修改 credential hash key，统一安全复制/替换 | GitHub 全量构建与产物核验通过，尚未完成设备稳定性回归 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -459,4 +459,27 @@ UCRED-SMR-18A2
 4. 正常使用并观察稳定性；只有足够观察期内不再产生同类 `ucred_rw` SMR panic，才能关闭该问题。
 5. respring、用户空间重启和手机重启均由用户自行触发；维护过程不得代为执行。
 
-3.0.24 当前仍是待构建、待设备验证状态，不能仅凭代码审查宣布 panic 已修复。
+### 3.0.24 构建记录
+
+GitHub Actions 第一次构建在新增错误码缺少 `<errno.h>` 时失败，补齐声明后第二次全量构建成功：
+
+```text
+successful run: 32487161830
+source commit: 11c003131dc0fd4957fd7d5d10c503064e9d4b51
+artifact id: 9448347509
+artifact: roothide-Dopamine-3.0.24-11c0031.tipa
+artifact ZIP SHA-256: bd7fbf5e13dc6d7257d82bee510283e8c00e4144bed2dcfa70ba08a7e4e28bc3
+TIPA SHA-256: e4927cfd4319958fd8c26ac1730daa5e595bb4fa479ab9952c929a43487e4050
+basebin.tar SHA-256: de85bc4076693e0291ad832cce42e0338d32c094bfe213f2e3a2b0b3569fa891
+```
+
+核验结果：
+
+- GitHub artifact digest 与下载的外层 ZIP SHA-256 完全一致。
+- `Info.plist` 的 `CFBundleShortVersionString = 3.0.24`。
+- `basebin/.version = 3.0.24`，`basebin/.build` 与 source commit 完全一致。
+- `libjailbreak.dylib`、`systemhook.dylib`、`jbctl` 均包含 arm64 和 arm64e 切片。
+- `UCRED-SMR-18A2` 存在于 `libjailbreak.dylib` 双切片；`RESPRING-IOS18-BBD1` 存在于 `systemhook.dylib`。
+- artifact ZIP、TIPA 和内层 `basebin.tar` 均可完整枚举和解包。
+
+3.0.24 当前是构建通过、待设备验证状态。不能仅凭构建与代码审查宣布 panic 已修复。
