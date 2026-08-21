@@ -48,6 +48,12 @@
 
 // Settings Buttons
 "Button_Remove_Jailbreak" = "Remove Jailbreak";
+"Button_Remove_TrollStore_Environment" = "Remove TrollStore Apps";
+"Remove_TrollStore_Environment_Title" = "Remove TrollStore Environment";
+"Remove_TrollStore_Environment_Empty" = "No TrollStore or TrollStore Lite installation records were found.";
+"Remove_TrollStore_Environment_Confirm" = "%lu marker-validated apps were found. Only the apps listed below will be uninstalled through LaunchServices. No app containers will be deleted directly.\n\n%@";
+"Button_Uninstall_Listed_Apps" = "Uninstall Listed Apps";
+"Remove_TrollStore_Environment_Success" = "The listed TrollStore apps were uninstalled successfully.";
 "Button_Hide_Jailbreak" = "Hide Jailbreak";
 "Button_Unhide_Jailbreak" = "Unhide Jailbreak";
 "Button_Refresh_Jailbreak_Apps" = "Refresh Jailbreak Apps";

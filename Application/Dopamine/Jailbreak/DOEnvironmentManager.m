@@ -888,6 +888,40 @@ extern char **environ;
     }
 }
 
+- (NSArray<NSDictionary<NSString *,NSString *> *> *)trollStoreInstalledApplicationsWithError:(NSError **)error
+{
+    NSMutableArray *applications = [NSMutableArray array];
+    int result = [self spawnJbctlAsRootWithArgs:@[@"trollstore_apps", @"list"] outputHandler:^(NSString *line) {
+        NSArray<NSString *> *parts = [line componentsSeparatedByString:@"\t"];
+        if (parts.count != 4 || ![parts[0] isEqualToString:@"APP"]) return;
+        [applications addObject:@{
+            @"bundleIdentifier" : parts[1],
+            @"name" : parts[2],
+            @"marker" : parts[3],
+        }];
+    }];
+    if (result != 0 && error) {
+        *error = [NSError errorWithDomain:bootstrapErrorDomain
+                                     code:result
+                                 userInfo:@{NSLocalizedDescriptionKey :
+                                     [NSString stringWithFormat:@"检测巨魔安装记录失败，辅助进程退出码：%d", result]}];
+    }
+    return result == 0 ? applications : nil;
+}
+
+- (NSError *)uninstallTrollStoreApplications:(NSArray<NSString *> *)bundleIdentifiers
+{
+    if (bundleIdentifiers.count == 0) return nil;
+    NSMutableArray *arguments = [NSMutableArray arrayWithObjects:@"trollstore_apps", @"uninstall", nil];
+    [arguments addObjectsFromArray:bundleIdentifiers];
+    int result = [self spawnJbctlAsRootWithArgs:arguments];
+    if (result == 0) return nil;
+    return [NSError errorWithDomain:bootstrapErrorDomain
+                               code:result
+                           userInfo:@{NSLocalizedDescriptionKey :
+                               [NSString stringWithFormat:@"移除巨魔安装记录失败，辅助进程退出码：%d。未完成的应用不会被直接删除。", result]}];
+}
+
 - (NSError *)reinstallPackageManagers
 {
     __block NSError *error;

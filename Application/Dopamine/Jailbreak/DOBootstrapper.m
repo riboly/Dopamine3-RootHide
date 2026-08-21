@@ -1110,6 +1110,11 @@ URIs: http://apt.thebigboss.org/repofiles/cydia/\n\
 Suites: stable\n\
 Components: main\n\
 \n\
+Types: deb\n\
+URIs: https://roothide.github.io/\n\
+Suites: ./\n\
+Components:\n\
+\n\
 "
 
 // #define ALT_SOURCES "\
@@ -1130,7 +1135,9 @@ deb https://getzbra.com/repo/ ./\n\
 deb https://repo.chariz.com/ ./\n\
 deb https://yourepo.com/ ./\n\
 deb https://havoc.app/ ./\n\
+deb https://roothide.github.io/ ./\n\
 deb https://roothide.github.io/procursus iphoneos-arm64e/%d main\n\
+deb https://github.com/roothide/roothide.github.io/releases/download/%d/ ./\n\
 \n\
 "
 
@@ -1206,10 +1213,9 @@ int getCFMajorVersion(void)
 
     [self ensureAptInfrastructure];
 
-    // Older RootHide ports added a GitHub release URL whose root directory is
-    // not a valid APT distribution. Remove that stanza from any Sileo-managed
-    // source file and discard its cached indexes before the next refresh.
-    NSString *obsoleteSource = [NSString stringWithFormat:@"https://github.com/roothide/roothide.github.io/releases/download/%d/", getCFMajorVersion()];
+    // Only the old rootless Procursus source is invalid for this bootstrap.
+    // RootHide's root repository and its versioned release repository are both
+    // valid and must remain available to package managers.
     NSArray *sourceDirectories = @[
         jbrootPrefix(@"/etc/apt"),
         jbrootPrefix(@"/etc/apt/sources.list.d"),
@@ -1229,35 +1235,22 @@ int getCFMajorVersion(void)
             NSString *contents = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
             if (!contents) continue;
 
-            // The stock bootstrap source is for rootless arm64. Leaving it
-            // beside the RootHide arm64e source makes Sileo resolve packages
-            // against apt.procurs.us, which produces the exact missing-folder
-            // error reported by the user.
-            // Do not rely on the filename: Sileo can create source files with
-            // arbitrary names, while the bootstrap's old URL is the stable
-            // identifier of the rootless source we need to remove.
-            if ([contents containsString:@"apt.procurs.us"]) {
-                [fm removeItemAtPath:path error:nil];
-                continue;
-            }
+            // The stock bootstrap source is for rootless arm64. Remove only
+            // its stanza so unrelated user sources in the same file survive.
             NSMutableArray *kept = [NSMutableArray array];
             BOOL isDeb822 = [path.pathExtension isEqualToString:@"sources"];
             BOOL changed = NO;
             if (isDeb822) {
                 for (NSString *stanza in [contents componentsSeparatedByString:@"\n\n"]) {
                     if (stanza.length == 0) continue;
-                    BOOL isObsoleteRelease = [stanza containsString:obsoleteSource];
-                    BOOL isUnsignedRoot = [stanza containsString:@"https://roothide.github.io/"] &&
-                        ![stanza containsString:@"https://roothide.github.io/procursus"];
-                    if (isObsoleteRelease || isUnsignedRoot) changed = YES;
+                    BOOL isObsoleteRootless = [stanza containsString:@"apt.procurs.us"];
+                    if (isObsoleteRootless) changed = YES;
                     else [kept addObject:stanza];
                 }
             } else {
                 for (NSString *line in [contents componentsSeparatedByString:@"\n"]) {
-                    BOOL isObsoleteRelease = [line containsString:obsoleteSource];
-                    BOOL isUnsignedRoot = [line containsString:@"https://roothide.github.io/"] &&
-                        ![line containsString:@"https://roothide.github.io/procursus"];
-                    if (isObsoleteRelease || isUnsignedRoot) changed = YES;
+                    BOOL isObsoleteRootless = [line containsString:@"apt.procurs.us"];
+                    if (isObsoleteRootless) changed = YES;
                     else [kept addObject:line];
                 }
             }
@@ -1272,15 +1265,13 @@ int getCFMajorVersion(void)
         }
     }
 
-    NSString *obsoleteCachePrefix = [NSString stringWithFormat:@"github.com_roothide_roothide.github.io_releases_download_%d", getCFMajorVersion()];
     NSArray *cacheDirectories = @[
         jbrootPrefix(@"/var/lib/apt/lists"),
         jbrootPrefix(@"/var/lib/apt/sileolists"),
     ];
     for (NSString *directory in cacheDirectories) {
         for (NSString *name in [fm contentsOfDirectoryAtPath:directory error:nil]) {
-            if ([name hasPrefix:obsoleteCachePrefix] || [name hasPrefix:@"apt.procurs.us_"] ||
-                [name hasPrefix:@"roothide.github.io_"]) {
+            if ([name hasPrefix:@"apt.procurs.us_"]) {
                 [fm removeItemAtPath:[directory stringByAppendingPathComponent:name] error:nil];
             }
         }
@@ -1300,15 +1291,25 @@ int getCFMajorVersion(void)
         return -1;
     }
 
-    // Replace the rootless bootstrap's apt.procurs.us source with the
-    // RootHide arm64e Procursus distribution. This file is separate from
-    // default.sources and must be rewritten on every re-jailbreak.
+    // Keep the RootHide Procursus distribution separate from the RootHide
+    // package repository in default.sources. Both are required: Procursus
+    // provides the bootstrap packages while the root repository provides
+    // RootHide tools such as com.roothide.patcher.
     NSString *roothideProcursus = [NSString stringWithFormat:
         @"Types: deb\n"
         @"URIs: https://roothide.github.io/procursus\n"
         @"Suites: iphoneos-arm64e/%d\n"
         @"Components: main\n", getCFMajorVersion()];
     ASSERT([roothideProcursus writeToFile:jbrootPrefix(@"/etc/apt/sources.list.d/procursus.sources") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+
+    // Keep the versioned RootHide release index as a separate source. Some
+    // RootHide packages are published there rather than in the root repo.
+    NSString *roothideRelease = [NSString stringWithFormat:
+        @"Types: deb\n"
+        @"URIs: https://github.com/roothide/roothide.github.io/releases/download/%d/\n"
+        @"Suites: ./\n"
+        @"Components:\n", getCFMajorVersion()];
+    ASSERT([roothideRelease writeToFile:jbrootPrefix(@"/etc/apt/sources.list.d/sileo.sources") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
 
     // //Users in some regions seem to be unable to access github.io
     // if([NSLocale.currentLocale.countryCode isEqualToString:@"CN"]) {

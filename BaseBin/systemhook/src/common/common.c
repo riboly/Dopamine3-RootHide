@@ -406,11 +406,13 @@ static int spawn_exec_hook_common(bool isExec,
 	if (r != 0 || !personaFixRequested) return r;
 	if (childPid <= 0) return ECHILD;
 
-	int personaResult = jbclient_persona_fix(childPid, personaFixUid, personaFixGid);
+	char *personaFailureStage = NULL;
+	int personaResult = jbclient_persona_fix_with_stage(childPid, personaFixUid, personaFixGid, &personaFailureStage);
 	if (personaResult != 0) {
 		os_log_error(OS_LOG_DEFAULT,
-			"Persona root fix failed child=%d uid=%d gid=%d result=%d path=%{public}s",
-			childPid, personaFixUid, personaFixGid, personaResult, path);
+			"Persona root fix failed stage=%{public}s child=%d uid=%d gid=%d result=%d path=%{public}s",
+			personaFailureStage ?: "persona-unknown", childPid, personaFixUid, personaFixGid, personaResult, path);
+		free(personaFailureStage);
 		if (kill(childPid, SIGKILL) == 0) {
 			while (waitpid(childPid, NULL, 0) < 0 && errno == EINTR) {}
 		}
@@ -419,6 +421,7 @@ static int spawn_exec_hook_common(bool isExec,
 		}
 		return personaResult > 0 ? personaResult : EACCES;
 	}
+	free(personaFailureStage);
 	if (personaFixNeedsResume && kill(childPid, SIGCONT) != 0) {
 		int resumeError = errno ?: EIO;
 		if (kill(childPid, SIGKILL) == 0) {

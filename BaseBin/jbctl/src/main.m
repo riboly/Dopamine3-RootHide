@@ -7,9 +7,94 @@
 #import <Foundation/Foundation.h>
 #import <CoreServices/LSApplicationProxy.h>
 
+@interface LSApplicationWorkspace : NSObject
++ (instancetype)defaultWorkspace;
+- (NSArray<LSApplicationProxy *> *)allApplications;
+- (BOOL)uninstallApplication:(NSString *)bundleIdentifier withOptions:(NSDictionary *)options error:(NSError **)error usingBlock:(id)block;
+@end
+
 int reboot3(uint64_t flags, ...);
 #define RB2_USERREBOOT (0x2000000000000000llu)
 extern char **environ;
+
+static NSDictionary<NSString *, NSDictionary *> *trollstore_installed_applications(void)
+{
+	Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+	if (!workspaceClass || ![workspaceClass respondsToSelector:@selector(defaultWorkspace)]) return nil;
+	LSApplicationWorkspace *workspace = [workspaceClass defaultWorkspace];
+	if (![workspace respondsToSelector:@selector(allApplications)]) return nil;
+
+	NSMutableDictionary *applications = [NSMutableDictionary dictionary];
+	NSFileManager *fileManager = NSFileManager.defaultManager;
+	for (LSApplicationProxy *proxy in workspace.allApplications) {
+		NSString *bundlePath = proxy.bundleURL.path;
+		if (bundlePath.length == 0) continue;
+		NSString *containerPath = bundlePath.stringByDeletingLastPathComponent;
+		NSString *rootfsContainerPath = [@"/rootfs" stringByAppendingString:containerPath];
+		BOOL isTrollStore = [fileManager fileExistsAtPath:[rootfsContainerPath stringByAppendingPathComponent:@"_TrollStore"]];
+		BOOL isTrollStoreLite = [fileManager fileExistsAtPath:[rootfsContainerPath stringByAppendingPathComponent:@"_TrollStoreLite"]];
+		if (!isTrollStore && !isTrollStoreLite) continue;
+
+		NSString *rootfsBundlePath = [@"/rootfs" stringByAppendingString:bundlePath];
+		NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[rootfsBundlePath stringByAppendingPathComponent:@"Info.plist"]];
+		NSString *bundleIdentifier = info[@"CFBundleIdentifier"];
+		if (bundleIdentifier.length == 0) continue;
+		NSString *displayName = info[@"CFBundleDisplayName"] ?: info[@"CFBundleName"] ?: bundleIdentifier;
+		displayName = [[displayName stringByReplacingOccurrencesOfString:@"\t" withString:@" "]
+			stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+		applications[bundleIdentifier] = @{
+			@"name" : displayName,
+			@"marker" : isTrollStoreLite ? @"TrollStoreLite" : @"TrollStore",
+		};
+	}
+	return applications;
+}
+
+static int trollstore_applications_command(int argc, char *argv[])
+{
+	if (argc < 3) return EINVAL;
+	NSDictionary<NSString *, NSDictionary *> *applications = trollstore_installed_applications();
+	if (!applications) {
+		fprintf(stderr, "ERROR\tLaunchServices is unavailable.\n");
+		return ENOSYS;
+	}
+
+	if (!strcmp(argv[2], "list")) {
+		for (NSString *bundleIdentifier in [applications.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+			NSDictionary *application = applications[bundleIdentifier];
+			printf("APP\t%s\t%s\t%s\n", bundleIdentifier.UTF8String,
+				[application[@"name"] UTF8String], [application[@"marker"] UTF8String]);
+		}
+		return 0;
+	}
+	if (strcmp(argv[2], "uninstall") != 0 || argc < 4) return EINVAL;
+	if (getuid() != 0) return EPERM;
+
+	LSApplicationWorkspace *workspace = [NSClassFromString(@"LSApplicationWorkspace") defaultWorkspace];
+	if (![workspace respondsToSelector:@selector(uninstallApplication:withOptions:error:usingBlock:)]) return ENOSYS;
+	for (int index = 3; index < argc; index++) {
+		NSString *bundleIdentifier = [NSString stringWithUTF8String:argv[index]];
+		if (bundleIdentifier.length == 0 || !applications[bundleIdentifier]) {
+			fprintf(stderr, "ERROR\t%s\tmarker validation failed\n", argv[index]);
+			return EACCES;
+		}
+		if ([bundleIdentifier hasPrefix:@"com.apple."] ||
+			[bundleIdentifier isEqualToString:@"com.opa334.Dopamine"] ||
+			[bundleIdentifier isEqualToString:@"com.opa334.Dopamine-roothide"]) {
+			fprintf(stderr, "ERROR\t%s\tprotected application\n", bundleIdentifier.UTF8String);
+			return EACCES;
+		}
+		NSError *error = nil;
+		BOOL removed = [workspace uninstallApplication:bundleIdentifier withOptions:@{} error:&error usingBlock:nil];
+		if (!removed) {
+			fprintf(stderr, "ERROR\t%s\t%s\n", bundleIdentifier.UTF8String,
+				error.localizedDescription.UTF8String ?: "LaunchServices uninstall failed");
+			return (int)(error.code ?: EIO);
+		}
+		printf("REMOVED\t%s\n", bundleIdentifier.UTF8String);
+	}
+	return 0;
+}
 
 void print_usage(void)
 {
@@ -19,11 +104,17 @@ Available commands:\n\
 	trustcache info\t\t\tPrint info about all jailbreak related trustcaches and the cdhashes contained in them\n\
 	trustcache clear\t\tClears all existing cdhashes from the jailbreaks trustcache\n\
 	trustcache add /path/to/macho\t\tAdd the cdhash of a macho to the jailbreaks trustcache\n\
+	trollstore_apps list\t\tList apps installed through TrollStore or TrollStore Lite\n\
+	trollstore_apps uninstall <bundle-id>...\tSafely uninstall marker-validated TrollStore apps\n\
 	update <tipa/basebin> <path>\tInitiates a jailbreak update either based on a TIPA or based on a basebin.tar file, TIPA installation depends on TrollStore, afterwards it triggers a userspace reboot\n");
 }
 
 int main(int argc, char* argv[])
 {
+	if (argc < 2) {
+		print_usage();
+		return 1;
+	}
 	if (!strcmp(argv[argc-1], "earlyboot")) {
 		// If jbctl is spawned in "early boot" state, the jbserver port needs to be obtained from registeredPorts[0] instead
 		mach_port_t *registeredPorts;
@@ -39,11 +130,6 @@ int main(int argc, char* argv[])
 	}
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
-	if (argc < 2) {
-		print_usage();
-		return 1;
-	}
-
 	if (geteuid() == 0) {
 		// When jailbroken the Dopamine app cannot have uid 0 because it can't drop it anymore without loosing it
 		// So in some cases (e.g. for spawning dpkg) we need to use jbctl to get it
@@ -163,6 +249,9 @@ int main(int argc, char* argv[])
 
 			
 		}
+	}
+	else if (!strcmp(cmd, "trollstore_apps")) {
+		return trollstore_applications_command(argc, argv);
 	}
 	else if (!strcmp(cmd, "reboot_userspace")) {
 		return reboot3(RB2_USERREBOOT);

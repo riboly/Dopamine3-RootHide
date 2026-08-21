@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <sys/param.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
 #include <poll.h>
 extern char **environ;
 
@@ -828,26 +829,26 @@ static void proc_copy_ucred(uint64_t procCopyFrom, uint64_t procCopyTo)
 static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX], const char **failureStageOut)
 {
 	if (failureStageOut) *failureStageOut = NULL;
-	int comPipe[2] = {-1, -1};
-	if (pipe(comPipe) != 0) {
-		if (failureStageOut) *failureStageOut = "donor-pipe";
+	int controlSockets[2] = {-1, -1};
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, controlSockets) != 0) {
+		if (failureStageOut) *failureStageOut = "donor-socket";
 		return -errno;
 	}
 
 	posix_spawn_file_actions_t actions = NULL;
 	int result = posix_spawn_file_actions_init(&actions);
-	if (result == 0) result = posix_spawn_file_actions_adddup2(&actions, comPipe[1], 3);
-	if (result == 0) result = posix_spawn_file_actions_addclose(&actions, comPipe[0]);
-	if (result == 0 && comPipe[1] != 3) result = posix_spawn_file_actions_addclose(&actions, comPipe[1]);
+	if (result == 0) result = posix_spawn_file_actions_addinherit_np(&actions, controlSockets[1]);
+	if (result == 0) result = posix_spawn_file_actions_addclose(&actions, controlSockets[0]);
 	if (result != 0) {
 		if (actions) posix_spawn_file_actions_destroy(&actions);
-		close(comPipe[0]);
-		close(comPipe[1]);
+		close(controlSockets[0]);
+		close(controlSockets[1]);
 		if (failureStageOut) *failureStageOut = "donor-file-actions";
 		return -result;
 	}
 
-	char uidString[12], gidString[12], ruidString[12], rgidString[12];
+	char controlFdString[12], uidString[12], gidString[12], ruidString[12], rgidString[12];
+	snprintf(controlFdString, sizeof(controlFdString), "%d", controlSockets[1]);
 	snprintf(uidString, sizeof(uidString), "%d", uid);
 	snprintf(gidString, sizeof(gidString), "%d", gid);
 	snprintf(ruidString, sizeof(ruidString), "%d", ruid);
@@ -862,7 +863,7 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 	int index = 0;
 	argv[index++] = procPath;
 	argv[index++] = "--fd";
-	argv[index++] = "3";
+	argv[index++] = controlFdString;
 	argv[index++] = "--uid";
 	argv[index++] = uidString;
 	argv[index++] = "--ruid";
@@ -884,15 +885,15 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 	pid_t childPid = 0;
 	result = posix_spawn(&childPid, procPath, &actions, NULL, (char *const *)argv, (char *const *)envp);
 	posix_spawn_file_actions_destroy(&actions);
-	close(comPipe[1]);
+	close(controlSockets[1]);
 	if (result != 0) {
-		close(comPipe[0]);
+		close(controlSockets[0]);
 		if (failureStageOut) *failureStageOut = "donor-spawn";
 		return -result;
 	}
 
 	struct pollfd pollFd = {
-		.fd = comPipe[0],
+		.fd = controlSockets[0],
 		.events = POLLIN,
 	};
 	do {
@@ -901,7 +902,7 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 	uint8_t ready = 0;
 	ssize_t readyLength = -1;
 	if (result > 0 && (pollFd.revents & (POLLIN | POLLHUP)) != 0) {
-		readyLength = read(comPipe[0], &ready, sizeof(ready));
+		readyLength = read(controlSockets[0], &ready, sizeof(ready));
 	}
 	if (result <= 0 || readyLength != sizeof(ready) || ready != 0x42) {
 		int helperError = result == 0 ? ETIMEDOUT : EPROTO;
@@ -910,12 +911,12 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 			*failureStageOut = result == 0 ? "donor-handshake-timeout" :
 				(result < 0 ? "donor-handshake-poll" : "donor-handshake-protocol");
 		}
-		close(comPipe[0]);
+		close(controlSockets[0]);
 		kill(childPid, SIGKILL);
 		cmd_wait_for_exit(childPid);
 		return -helperError;
 	}
-	close(comPipe[0]);
+	close(controlSockets[0]);
 	return childPid;
 }
 

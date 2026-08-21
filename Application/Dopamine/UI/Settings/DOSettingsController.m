@@ -780,6 +780,16 @@ static void RHInstallFridaFromURL(NSURL *url)
                     }
 */
                     [specifiers addObject:removeJailbreakSpecifier];
+
+                    if (envManager.isJailbroken) {
+                        PSSpecifier *removeTrollStoreSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
+                        [removeTrollStoreSpecifier setProperty:@"Button_Remove_TrollStore_Environment" forKey:@"title"];
+                        [removeTrollStoreSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
+                        [removeTrollStoreSpecifier setProperty:buttonHeight forKey:@"height"];
+                        [removeTrollStoreSpecifier setProperty:@"externaldrive.badge.xmark" forKey:@"image"];
+                        [removeTrollStoreSpecifier setProperty:@"removeTrollStoreEnvironmentPressed" forKey:@"action"];
+                        [specifiers addObject:removeTrollStoreSpecifier];
+                    }
                 }
             }
         }
@@ -1214,6 +1224,55 @@ static void RHInstallFridaFromURL(NSURL *url)
     [confirmationAlertController addAction:uninstallAction];
     [confirmationAlertController addAction:cancelAction];
     [self presentViewController:confirmationAlertController animated:YES completion:nil];
+}
+
+- (void)removeTrollStoreEnvironmentPressed
+{
+    NSError *detectionError = nil;
+    NSArray<NSDictionary<NSString *, NSString *> *> *applications =
+        [[DOEnvironmentManager sharedManager] trollStoreInstalledApplicationsWithError:&detectionError];
+    if (!applications) {
+        UIAlertController *errorAlert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Log_Error")
+                                                                             message:detectionError.localizedDescription
+                                                                      preferredStyle:UIAlertControllerStyleAlert];
+        [errorAlert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:errorAlert animated:YES completion:nil];
+        return;
+    }
+    if (applications.count == 0) {
+        UIAlertController *emptyAlert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Remove_TrollStore_Environment_Title")
+                                                                            message:DOLocalizedString(@"Remove_TrollStore_Environment_Empty")
+                                                                     preferredStyle:UIAlertControllerStyleAlert];
+        [emptyAlert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:emptyAlert animated:YES completion:nil];
+        return;
+    }
+
+    NSMutableArray<NSString *> *descriptions = [NSMutableArray array];
+    NSMutableArray<NSString *> *bundleIdentifiers = [NSMutableArray array];
+    for (NSDictionary *application in applications) {
+        [descriptions addObject:[NSString stringWithFormat:@"%@\n%@ (%@)", application[@"name"],
+            application[@"bundleIdentifier"], application[@"marker"]]];
+        [bundleIdentifiers addObject:application[@"bundleIdentifier"]];
+    }
+    NSString *message = [NSString stringWithFormat:DOLocalizedString(@"Remove_TrollStore_Environment_Confirm"),
+        (unsigned long)applications.count, [descriptions componentsJoinedByString:@"\n\n"]];
+    UIAlertController *confirmation = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Remove_TrollStore_Environment_Title")
+                                                                          message:message
+                                                                   preferredStyle:UIAlertControllerStyleAlert];
+    [confirmation addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Uninstall_Listed_Apps")
+                                                     style:UIAlertActionStyleDestructive
+                                                   handler:^(__unused UIAlertAction *action) {
+        NSError *error = [[DOEnvironmentManager sharedManager] uninstallTrollStoreApplications:bundleIdentifiers];
+        NSString *resultMessage = error ? error.localizedDescription : DOLocalizedString(@"Remove_TrollStore_Environment_Success");
+        UIAlertController *resultAlert = [UIAlertController alertControllerWithTitle:error ? DOLocalizedString(@"Log_Error") : DOLocalizedString(@"Remove_TrollStore_Environment_Title")
+                                                                              message:resultMessage
+                                                                       preferredStyle:UIAlertControllerStyleAlert];
+        [resultAlert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:resultAlert animated:YES completion:nil];
+    }]];
+    [confirmation addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:confirmation animated:YES completion:nil];
 }
 
 - (void)showMountMessage:(NSString *)message

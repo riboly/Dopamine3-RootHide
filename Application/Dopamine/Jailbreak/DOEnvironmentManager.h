@@ -80,6 +80,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSError *)prepareBootstrap;
 - (NSError *)finalizeBootstrap;
 - (NSError *)deleteBootstrap;
+- (NSArray<NSDictionary<NSString *, NSString *> *> *)trollStoreInstalledApplicationsWithError:(NSError **)error;
+- (NSError *)uninstallTrollStoreApplications:(NSArray<NSString *> *)bundleIdentifiers;
 - (NSError *)reinstallPackageManagers;
 - (NSError *)updateBootLogo;
 - (NSArray<NSString *> *)fakeMountPaths;
