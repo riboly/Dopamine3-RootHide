@@ -23,6 +23,7 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <poll.h>
+#include "setid_donor.h"
 extern char **environ;
 
 #include "roothider.h"
@@ -847,43 +848,42 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 		return -result;
 	}
 
-	char controlFdString[12], uidString[12], gidString[12], ruidString[12], rgidString[12];
+	int groupCount = 0;
+	while (groupCount < NGROUPS_MAX && groups[groupCount] != (gid_t)-1) groupCount++;
+	if (groupCount == 0) groupCount = 1;
+
+	char controlFdString[12], uidString[12], gidString[12], ruidString[12], rgidString[12], groupCountString[12];
 	snprintf(controlFdString, sizeof(controlFdString), "%d", controlSockets[1]);
-	snprintf(uidString, sizeof(uidString), "%d", uid);
-	snprintf(gidString, sizeof(gidString), "%d", gid);
-	snprintf(ruidString, sizeof(ruidString), "%d", ruid);
-	snprintf(rgidString, sizeof(rgidString), "%d", rgid);
+	snprintf(uidString, sizeof(uidString), "%u", uid);
+	snprintf(gidString, sizeof(gidString), "%u", gid);
+	snprintf(ruidString, sizeof(ruidString), "%u", ruid);
+	snprintf(rgidString, sizeof(rgidString), "%u", rgid);
+	snprintf(groupCountString, sizeof(groupCountString), "%d", groupCount);
 
 	char groupStrings[NGROUPS_MAX][12];
 	for (int i = 0; i < NGROUPS_MAX; i++) {
 		snprintf(groupStrings[i], sizeof(groupStrings[i]), "%d", groups[i]);
 	}
 
-	const char *argv[1 + 6 + 5 + NGROUPS_MAX + 1];
+	char *argv[JB_SETID_DONOR_FIXED_ARGC + NGROUPS_MAX + 1] = {0};
 	int index = 0;
-	argv[index++] = procPath;
-	argv[index++] = "--fd";
+	argv[index++] = (char *)procPath;
+	argv[index++] = JB_SETID_DONOR_ARGUMENT;
 	argv[index++] = controlFdString;
-	argv[index++] = "--uid";
 	argv[index++] = uidString;
-	argv[index++] = "--ruid";
 	argv[index++] = ruidString;
-	argv[index++] = "--gid";
 	argv[index++] = gidString;
-	argv[index++] = "--rgid";
 	argv[index++] = rgidString;
-	argv[index++] = "--groups";
-	for (int i = 0; i < NGROUPS_MAX; i++) argv[index++] = groupStrings[i];
+	argv[index++] = groupCountString;
+	for (int i = 0; i < groupCount; i++) argv[index++] = groupStrings[i];
 	argv[index] = NULL;
 
-	const char *envp[] = {
-		"_SafeMode=1",
-		"DYLD_HOOK_SETUID=1",
-		NULL,
-	};
+	// launchd's normal spawn hook injects systemhook, whose constructor handles
+	// the donor marker before the target executable reaches main().
+	char *const donorEnvironment[] = {NULL};
 
 	pid_t childPid = 0;
-	result = posix_spawn(&childPid, procPath, &actions, NULL, (char *const *)argv, (char *const *)envp);
+	result = posix_spawn(&childPid, procPath, &actions, NULL, argv, donorEnvironment);
 	posix_spawn_file_actions_destroy(&actions);
 	close(controlSockets[1]);
 	if (result != 0) {
@@ -899,17 +899,19 @@ static int target_proc_with_ucred(const char *procPath, uid_t uid, gid_t gid, ui
 	do {
 		result = poll(&pollFd, 1, 10000);
 	} while (result < 0 && errno == EINTR);
-	uint8_t ready = 0;
+	struct jb_setid_donor_reply reply = {0};
 	ssize_t readyLength = -1;
 	if (result > 0 && (pollFd.revents & (POLLIN | POLLHUP)) != 0) {
-		readyLength = read(controlSockets[0], &ready, sizeof(ready));
+		readyLength = recv(controlSockets[0], &reply, sizeof(reply), MSG_WAITALL);
 	}
-	if (result <= 0 || readyLength != sizeof(ready) || ready != 0x42) {
+	if (result <= 0 || readyLength != sizeof(reply) || reply.magic != JB_SETID_DONOR_MAGIC || reply.donorPid != childPid || reply.status != 0) {
 		int helperError = result == 0 ? ETIMEDOUT : EPROTO;
 		if (result < 0) helperError = errno;
+		if (readyLength == sizeof(reply) && reply.magic == JB_SETID_DONOR_MAGIC && reply.status != 0) helperError = reply.status;
 		if (failureStageOut) {
 			*failureStageOut = result == 0 ? "donor-handshake-timeout" :
-				(result < 0 ? "donor-handshake-poll" : "donor-handshake-protocol");
+				(result < 0 ? "donor-handshake-poll" :
+					(readyLength == sizeof(reply) && reply.magic == JB_SETID_DONOR_MAGIC && reply.status != 0 ? "donor-identity" : "donor-handshake-protocol"));
 		}
 		close(controlSockets[0]);
 		kill(childPid, SIGKILL);

@@ -2,9 +2,127 @@
 #include "roothider.h"
 #include <dirent.h>
 #include <limits.h>
+#include <mach-o/dyld.h>
 #include <os/log.h>
+#include <sys/param.h>
+#include <unistd.h>
+#include <libjailbreak/setid_donor.h>
 
 static const char kTrustFlowBuildMarker[] __attribute__((used)) = "TRUSTFLOW-8A10";
+
+struct setid_donor_request {
+	int controlFd;
+	uid_t uid;
+	uid_t ruid;
+	gid_t gid;
+	gid_t rgid;
+	int groupCount;
+	gid_t groups[NGROUPS_MAX];
+};
+
+static int setid_donor_parse_u32(const char *value, uint32_t *resultOut)
+{
+	if (!value || !resultOut || value[0] == '\0') return EINVAL;
+	uint32_t result = 0;
+	for (const char *cursor = value; *cursor != '\0'; cursor++) {
+		if (*cursor < '0' || *cursor > '9') return EINVAL;
+		uint32_t digit = (uint32_t)(*cursor - '0');
+		if (result > (UINT32_MAX - digit) / 10) return ERANGE;
+		result = result * 10 + digit;
+	}
+	*resultOut = result;
+	return 0;
+}
+
+static int setid_donor_parse_request(int argc, char *const argv[], struct setid_donor_request *requestOut)
+{
+	if (!argv || !requestOut || argc < JB_SETID_DONOR_FIXED_ARGC) return EINVAL;
+	struct setid_donor_request request = {.controlFd = -1};
+	uint32_t value = 0;
+	int status = setid_donor_parse_u32(argv[JB_SETID_DONOR_ARG_CONTROL_FD], &value);
+	if (status != 0 || value > INT_MAX) return status != 0 ? status : ERANGE;
+	request.controlFd = (int)value;
+
+#define PARSE_DONOR_ID(argument, field, type) do { \
+	status = setid_donor_parse_u32(argv[argument], &value); \
+	if (status != 0) return status; \
+	request.field = (type)value; \
+} while (0)
+	PARSE_DONOR_ID(JB_SETID_DONOR_ARG_UID, uid, uid_t);
+	PARSE_DONOR_ID(JB_SETID_DONOR_ARG_RUID, ruid, uid_t);
+	PARSE_DONOR_ID(JB_SETID_DONOR_ARG_GID, gid, gid_t);
+	PARSE_DONOR_ID(JB_SETID_DONOR_ARG_RGID, rgid, gid_t);
+#undef PARSE_DONOR_ID
+
+	status = setid_donor_parse_u32(argv[JB_SETID_DONOR_ARG_NGROUPS], &value);
+	if (status != 0) return status;
+	if (value == 0 || value > NGROUPS_MAX) return E2BIG;
+	request.groupCount = (int)value;
+	if (argc != JB_SETID_DONOR_FIXED_ARGC + request.groupCount) return EINVAL;
+	for (int index = 0; index < request.groupCount; index++) {
+		status = setid_donor_parse_u32(argv[JB_SETID_DONOR_FIXED_ARGC + index], &value);
+		if (status != 0) return status;
+		request.groups[index] = (gid_t)value;
+	}
+	*requestOut = request;
+	return 0;
+}
+
+static int setid_donor_write_all(int fd, const void *buffer, size_t size)
+{
+	const uint8_t *cursor = buffer;
+	while (size > 0) {
+		ssize_t written = write(fd, cursor, size);
+		if (written < 0) {
+			if (errno == EINTR) continue;
+			return errno ?: EIO;
+		}
+		if (written == 0) return EIO;
+		cursor += written;
+		size -= (size_t)written;
+	}
+	return 0;
+}
+
+__attribute__((noreturn)) static void setid_donor_run(int argc, char *const argv[])
+{
+	struct setid_donor_request request = {.controlFd = -1};
+	int status = setid_donor_parse_request(argc, argv, &request);
+	if (status == 0 && setgroups(request.groupCount, request.groups) != 0) status = errno ?: EPERM;
+	if (status == 0 && setregid(request.rgid, request.gid) != 0) status = errno ?: EPERM;
+	if (status == 0 && setreuid(request.ruid, request.uid) != 0) status = errno ?: EPERM;
+	if (status == 0 && (getuid() != request.ruid || geteuid() != request.uid ||
+		getgid() != request.rgid || getegid() != request.gid)) status = EIO;
+	if (status == 0) {
+		gid_t observedGroups[NGROUPS_MAX] = {0};
+		int observedCount = getgroups(NGROUPS_MAX, observedGroups);
+		if (observedCount != request.groupCount ||
+			memcmp(observedGroups, request.groups, request.groupCount * sizeof(gid_t)) != 0) status = EIO;
+	}
+
+	if (request.controlFd >= 0) {
+		struct jb_setid_donor_reply reply = {
+			.magic = JB_SETID_DONOR_MAGIC,
+			.status = status,
+			.donorPid = status == 0 ? getpid() : 0,
+		};
+		int writeStatus = setid_donor_write_all(request.controlFd, &reply, sizeof(reply));
+		if (status == 0 && writeStatus != 0) status = writeStatus;
+	}
+	if (status != 0) _exit(127);
+	for (;;) pause();
+}
+
+static void setid_donor_run_if_requested(void)
+{
+	int *argcPointer = _NSGetArgc();
+	char ***argvPointer = _NSGetArgv();
+	if (!argcPointer || !argvPointer || !*argvPointer || *argcPointer <= JB_SETID_DONOR_ARG_MARKER) return;
+	char **argv = *argvPointer;
+	if (argv[JB_SETID_DONOR_ARG_MARKER] && !strcmp(argv[JB_SETID_DONOR_ARG_MARKER], JB_SETID_DONOR_ARGUMENT)) {
+		setid_donor_run(*argcPointer, argv);
+	}
+}
 
 static bool path_has_suffix(const char *path, const char *suffix)
 {
@@ -75,7 +193,6 @@ static int trust_executable_recurse_no_arch(const char *path)
 	return result;
 }
 
-#include <mach-o/dyld.h>
 #include <mach-o/dyld_images.h>
 #include <mach-o/getsect.h>
 #include <dlfcn.h>
@@ -384,6 +501,8 @@ int parse_dyldhook_jbinfo(char **jbRootPathOut, char **bootUUIDOut, char **sandb
 
 __attribute__((constructor)) static void initializer(void)
 {	
+	setid_donor_run_if_requested();
+
 /***** roothide specific ****/
 	roothide_init();
 /***** roothide specific ****/
