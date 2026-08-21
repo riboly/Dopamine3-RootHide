@@ -4,6 +4,7 @@
 #include <libjailbreak/codesign.h>
 #include <libjailbreak/libjailbreak.h>
 #include <libproc.h>
+#include <errno.h>
 #include <sys/param.h>
 
 static char *read_file_to_string(const char *path) {
