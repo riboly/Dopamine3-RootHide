@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 3.0.21 | 修复 RootHide setid donor 握手 | Sileo 源名称、更新、安装全部正常；Zebra 正常启动和使用 |
 | 3.0.22 | 修复重启后重新月余导致用户软件源丢失 | 用户已确认 `sileo.sources` 与 `roothide-release.sources` 生效，软件源持久化正常 |
-| 3.0.23 | 修复 iOS 18 `ucred` SMR 生命周期和异常 respring | 代码与构建验证后仍需设备覆盖安装、重新月余、respring 和稳定性观察 |
+| 3.0.23 | 修复 iOS 18 `ucred` SMR 生命周期和异常 respring | GitHub 全量构建与产物核验通过；仍需设备覆盖安装、重新月余、respring 和稳定性观察 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -295,6 +295,27 @@ UCRED-SMR-18A1
 2. 多次正常安装/卸载小型软件包后没有 `donor-ucred-copy` 错误。
 3. 观察期内不再出现相同 `smr.c:2831` panic。
 4. 如仍有 panic，必须按新的 panic string 和 `item/linkage` 重新分类，不能直接归因于本次旧日志。
+
+### 构建记录
+
+GitHub Actions 全量构建：
+
+```text
+run: 32478274023
+source commit: 6cb051f303596048c63f74032d30f519c24fd632
+artifact id: 9445143469
+artifact: roothide-Dopamine-3.0.23-6cb051f.tipa
+artifact ZIP SHA-256: b5a701bc8a252d8124cbfcd9b3aefc2327007ea83da728ef8deb5621d80f7650
+TIPA SHA-256: 8e8a92cf6167076e4785642daf33ef0f0ad4ac162f641b65990e121bdb4a370f
+```
+
+核验结果：
+
+- `Info.plist`：`CFBundleShortVersionString = 3.0.23`。
+- `basebin/.version = 3.0.23`，`basebin/.build` 与 source commit 一致。
+- `libjailbreak.dylib`、`systemhook.dylib`、`jbctl` 均包含 arm64 和 arm64e 切片。
+- `UCRED-SMR-18A1` 与 `RESPRING-IOS18-BBD1` 均存在于最终 `basebin.tar` 对应双切片中。
+- artifact ZIP digest 与 GitHub 元数据一致，TIPA 与内层 `basebin.tar` 均可完整解包。
 
 ## 11. iOS 18 respring 变成整机式重启
 
