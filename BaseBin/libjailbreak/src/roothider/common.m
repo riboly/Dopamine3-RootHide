@@ -179,13 +179,18 @@ bool process_force_dyld_patch(const char* path, const char** argv)
 
     if(__builtin_available(iOS 16.0, *))
     {
-        if(string_has_suffix(path, "/System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.WebContent.xpc/com.apple.WebKit.WebContent")) {
-            return true;
+        const char *webContentSuffixes[] = {
+            "/System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.WebContent.xpc/com.apple.WebKit.WebContent",
+            "/System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.WebContent.CaptivePortal.xpc/com.apple.WebKit.WebContent.CaptivePortal",
+            // iOS 18 launches these directly from the Cryptex-backed ExtensionKit directory.
+            "/System/Library/ExtensionKit/Extensions/WebContentExtension.appex/com.apple.WebKit.WebContent",
+            "/System/Library/ExtensionKit/Extensions/WebContentCaptivePortalExtension.appex/com.apple.WebKit.WebContent.CaptivePortal",
+        };
+        for (size_t i = 0; i < sizeof(webContentSuffixes) / sizeof(webContentSuffixes[0]); i++) {
+            if (string_has_suffix(path, webContentSuffixes[i])) return true;
         }
-        else if(string_has_suffix(path, "/System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.WebContent.CaptivePortal.xpc/com.apple.WebKit.WebContent.CaptivePortal")) {
-            return true;
-        }
-        else if(strcmp(path, "/usr/libexec/xpcproxy")==0)
+
+        if(path && strcmp(path, "/usr/libexec/xpcproxy")==0)
         {
             if (argv && argv[0] && argv[1]) {
                 if(string_has_prefix(argv[1], "com.apple.WebKit.WebContent")) {
