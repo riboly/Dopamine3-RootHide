@@ -4,6 +4,11 @@ RootHide on Dopamine 3 ports the RootHide jailbreak environment to the
 Dopamine 3 codebase. It keeps Dopamine's device and exploit support while
 providing RootHide's randomized jailbreak root and package environment.
 
+Maintenance notes and device-safe validation procedures are in
+[`docs/ROOTHIDE_DOPAMINE_MAINTENANCE.md`](docs/ROOTHIDE_DOPAMINE_MAINTENANCE.md).
+The repository-local Codex workflow is in
+[`skills/dopamine-roothide-maintainer/SKILL.md`](skills/dopamine-roothide-maintainer/SKILL.md).
+
 This project is experimental. Back up important data before testing, and
 remove incompatible tweaks if SpringBoard enters a respring loop.
 

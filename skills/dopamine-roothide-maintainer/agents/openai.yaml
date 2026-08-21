@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dopamine RootHide Maintainer"
+  short_description: "Diagnose and maintain the iOS 18 RootHide Dopamine fork"
+  default_prompt: "Use $dopamine-roothide-maintainer to diagnose or maintain the Dopamine3-RootHide fork with its device-safety and validation workflow."

@@ -1277,6 +1277,43 @@ int getCFMajorVersion(void)
         }
     }
 
+    // Older builds stored the managed RootHide release source in
+    // sileo.sources, which Sileo also uses for user-added repositories. Move
+    // only our exact stanza out of that shared file and preserve every other
+    // stanza. Normalize line endings only when a migration is required.
+    NSString *legacySileoPath = jbrootPrefix(@"/etc/apt/sources.list.d/sileo.sources");
+    NSString *legacySileoContents = [NSString stringWithContentsOfFile:legacySileoPath
+                                                               encoding:NSUTF8StringEncoding
+                                                                  error:nil];
+    if (legacySileoContents.length) {
+        NSString *managedStanza = [NSString stringWithFormat:
+            @"Types: deb\n"
+            @"URIs: https://github.com/roothide/roothide.github.io/releases/download/%d/\n"
+            @"Suites: ./\n"
+            @"Components:",
+            getCFMajorVersion()];
+        NSString *normalizedContents = [legacySileoContents stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"];
+        NSMutableArray<NSString *> *keptStanzas = [NSMutableArray array];
+        BOOL removedManagedStanza = NO;
+        for (NSString *stanza in [normalizedContents componentsSeparatedByString:@"\n\n"]) {
+            NSString *trimmed = [stanza stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            if (!trimmed.length) continue;
+            if ([trimmed isEqualToString:managedStanza]) {
+                removedManagedStanza = YES;
+            } else {
+                [keptStanzas addObject:stanza];
+            }
+        }
+        if (removedManagedStanza) {
+            if (keptStanzas.count == 0) {
+                ASSERT([fm removeItemAtPath:legacySileoPath error:nil]);
+            } else {
+                NSString *preservedContents = [[keptStanzas componentsJoinedByString:@"\n\n"] stringByAppendingString:@"\n"];
+                ASSERT([preservedContents writeToFile:legacySileoPath atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -1309,7 +1346,7 @@ int getCFMajorVersion(void)
         @"URIs: https://github.com/roothide/roothide.github.io/releases/download/%d/\n"
         @"Suites: ./\n"
         @"Components:\n", getCFMajorVersion()];
-    ASSERT([roothideRelease writeToFile:jbrootPrefix(@"/etc/apt/sources.list.d/sileo.sources") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+    ASSERT([roothideRelease writeToFile:jbrootPrefix(@"/etc/apt/sources.list.d/roothide-release.sources") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
 
     // //Users in some regions seem to be unable to access github.io
     // if([NSLocale.currentLocale.countryCode isEqualToString:@"CN"]) {
@@ -1322,7 +1359,10 @@ int getCFMajorVersion(void)
         ASSERT([fm createDirectoryAtPath:jbrootPrefix(@"/var/mobile/Library/Application Support/xyz.willy.Zebra") withIntermediateDirectories:YES attributes:attr error:nil]);
     }
     
-    ASSERT([[NSString stringWithFormat:@(ZEBRA_SOURCES), getCFMajorVersion(), getCFMajorVersion()] writeToFile:jbrootPrefix(@"/var/mobile/Library/Application Support/xyz.willy.Zebra/sources.list") atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+    NSString *zebraSourcesPath = jbrootPrefix(@"/var/mobile/Library/Application Support/xyz.willy.Zebra/sources.list");
+    if (![fm fileExistsAtPath:zebraSourcesPath]) {
+        ASSERT([[NSString stringWithFormat:@(ZEBRA_SOURCES), getCFMajorVersion(), getCFMajorVersion()] writeToFile:zebraSourcesPath atomically:YES encoding:NSUTF8StringEncoding error:nil]);
+    }
     
     return 0;
 }
