@@ -619,7 +619,30 @@ complete
 UCRED-SMR-18A5
 ```
 
-3.0.26 仍需完整构建和设备验证，不能从静态分析宣布修复完成。
+### 3.0.26 构建记录
+
+GitHub Actions 全量构建：
+
+```text
+successful run: 32494919456
+source commit: 6609f27204b61c800e6ca3947b6b5d0ac267b5a7
+artifact id: 9451283546
+artifact: roothide-Dopamine-3.0.26-6609f27.tipa
+artifact ZIP SHA-256: c0ea2b773f3c9e8716e688895070a745b1d56769efde9fd70ba251f3cec1cef8
+TIPA SHA-256: 68182288ff3cbc4aa22017c788f7aafc3cfe85153d362bee9bb7d54a4f4d2056
+basebin.tar SHA-256: 9cae038fd1c86379dc7807835de96c0fc3d6c056c6bf5e29a02394f82a6e8680
+```
+
+核验结果：
+
+- GitHub artifact digest 与下载的外层 ZIP SHA-256 完全一致。
+- 外层 artifact ZIP、TIPA 和内层 `basebin.tar` 均可完整枚举。
+- `Info.plist` 的 `CFBundleShortVersionString = 3.0.26`。
+- `basebin/.version = 3.0.26`，`basebin/.build` 与 source commit 完全一致。
+- `libjailbreak.dylib`、`systemhook.dylib`、`jbctl` 均包含 arm64 和 arm64e 切片。
+- `UCRED-SMR-18A5` 存在于 `libjailbreak.dylib`；`RESPRING-IOS18-BBD1` 存在于 `systemhook.dylib`。
+
+3.0.26 已通过源码、工作流和产物核验，但仍需真实设备完成首次月余和后续稳定性验证，不能仅凭构建宣布 panic 已关闭。
 
 ### 22:36 最新 panic
 
