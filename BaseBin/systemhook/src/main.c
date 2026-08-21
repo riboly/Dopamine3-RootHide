@@ -2,17 +2,49 @@
 #include "roothider.h"
 #include <crt_externs.h>
 #include <dirent.h>
+#include <errno.h>
 #include <grp.h>
 #include <limits.h>
 #include <mach-o/dyld.h>
 #include <os/log.h>
 #include <signal.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/param.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 #include <libjailbreak/setid_donor.h>
 
 static const char kTrustFlowBuildMarker[] __attribute__((used)) = "TRUSTFLOW-8A10";
 static const char kIOS18RespringFixMarker[] __attribute__((used)) = "RESPRING-IOS18-BBD1";
+
+static int terminate_backboardd(void)
+{
+	int mib[3] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL };
+	size_t length = 0;
+	if (sysctl(mib, 3, NULL, &length, NULL, 0) != 0) return errno;
+	struct kinfo_proc *processes = malloc(length);
+	if (!processes) return ENOMEM;
+	if (sysctl(mib, 3, processes, &length, NULL, 0) != 0) {
+		int status = errno;
+		free(processes);
+		return status;
+	}
+
+	int status = ESRCH;
+	size_t count = length / sizeof(*processes);
+	for (size_t i = 0; i < count; i++) {
+		if (strcmp(processes[i].kp_proc.p_comm, "backboardd") != 0) continue;
+		pid_t pid = processes[i].kp_proc.p_pid;
+		if (pid > 0 && kill(pid, SIGTERM) == 0) {
+			status = 0;
+			break;
+		}
+		status = errno;
+	}
+	free(processes);
+	return status;
+}
 
 struct setid_donor_request {
 	int controlFd;
@@ -589,7 +621,7 @@ roothide_init_with_checkin(JB_RootPath); // will hook dlopen* if necessary
 			if (path_has_suffix(gExecutablePath, "/usr/bin/sbreload")) {
 				// Keep third-party tools that invoke sbreload directly on the
 				// same iOS 18-safe path used by jbctl.
-				int status = killall_with_status("/usr/libexec/backboardd", SIGTERM);
+				int status = terminate_backboardd();
 				if (status != 0) {
 					os_log_error(OS_LOG_DEFAULT, "[RESPRING-IOS18-BBD1] failed to terminate "
 						"backboardd status=%d uid=%d", status, getuid());

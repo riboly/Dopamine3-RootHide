@@ -7,6 +7,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreServices/LSApplicationProxy.h>
 #include <signal.h>
+#include <string.h>
 
 @interface LSApplicationWorkspace : NSObject
 + (instancetype)defaultWorkspace;

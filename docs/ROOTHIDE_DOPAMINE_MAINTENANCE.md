@@ -314,6 +314,7 @@ reboot3(RB2_USERREBOOT);
 
 - `jbctl respring` 在 iOS 18+ 直接向 `backboardd` 发送 `SIGTERM`，不再执行旧 `sbreload` FrontBoard 流程。
 - systemhook 在 iOS 18+ 识别直接执行的 `/usr/bin/sbreload`，让 Sileo、Zebra、控制中心模块等第三方调用者走同一传统 respring 路径。
+- 设备只读检查确认 SpringBoard 与 backboardd 均以 `mobile` 运行；第三方 `sbreload` 可在同一 UID 下合法发送信号，无需增加新的 jbserver 提权接口。
 - 两条路径都检查是否真正找到并成功发出信号；权限不足时返回非零并写日志，不再静默报告成功。
 - 修正 `killall()` 的参数缓冲区长度不匹配：缓冲区现在按传给 `KERN_PROCARGS2` 的 `KERN_ARGMAX` 分配，避免进程列表较小时发生用户态堆越界。
 - iOS 17 及更旧系统保留原行为，缩小兼容性影响范围。
