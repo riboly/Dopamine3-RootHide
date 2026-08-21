@@ -842,7 +842,78 @@ static int setid_validate_copy_state(const char *phase,
 	return ESRCH;
 }
 
-static int proc_copy_ucred(uint64_t procCopyFrom, uint64_t procCopyTo)
+static int setid_validate_target_state(const char *phase,
+	const struct setid_proc_snapshot *target)
+{
+	uint64_t targetProc = proc_find(target->pid);
+	uint64_t targetUcred = targetProc ? proc_ucred(targetProc) : 0;
+	if (targetProc == target->proc && targetUcred == target->ucred) return 0;
+	JBLogError("ucred replace failed phase=%s target-pid=%d target-proc=0x%llx/0x%llx "
+		"target-ucred=0x%llx/0x%llx", phase, target->pid, target->proc,
+		targetProc, target->ucred, targetUcred);
+	return ESRCH;
+}
+
+int proc_replace_ucred(uint64_t proc, uint64_t newUcred, uint64_t *oldUcredOut)
+{
+	if (oldUcredOut) *oldUcredOut = 0;
+	if (!proc || !newUcred) return EINVAL;
+	struct setid_proc_snapshot target = {
+		.pid = kread32(proc + koffsetof(proc, pid)),
+		.proc = proc,
+		.ucred = proc_ucred(proc),
+	};
+	if (!target.ucred) return EFAULT;
+	int status = setid_validate_target_state("new-reference", &target);
+	if (status != 0) return status;
+	if (target.ucred == newUcred) {
+		if (oldUcredOut) *oldUcredOut = target.ucred;
+		return 0;
+	}
+
+	status = kauth_cred_ref(newUcred);
+	if (status != 0) return status;
+	status = kauth_cred_hold(newUcred);
+	if (status != 0) {
+		(void)kauth_cred_unref(newUcred);
+		return status;
+	}
+	status = setid_validate_target_state("publish", &target);
+	if (status != 0) {
+		if (kauth_cred_drop(newUcred) == 0) (void)kauth_cred_unref(newUcred);
+		return status;
+	}
+
+	uint64_t originalUcred = target.ucred;
+	uint64_t observedUcred = 0;
+	status = proc_ucred_update(proc, newUcred, &observedUcred);
+	if (status != 0) {
+		if (observedUcred == originalUcred && kauth_cred_drop(newUcred) == 0) {
+			(void)kauth_cred_unref(newUcred);
+		}
+		JBLogError("ucred replace failed phase=publish-write target-proc=0x%llx "
+			"new-ucred=0x%llx observed-ucred=0x%llx status=%d", proc,
+			newUcred, observedUcred, status);
+		return status;
+	}
+
+	target.ucred = newUcred;
+	status = setid_validate_target_state("release-old", &target);
+	if (status != 0) return status;
+	if (oldUcredOut) *oldUcredOut = originalUcred;
+	int dropStatus = kauth_cred_drop(originalUcred);
+	int unrefStatus = dropStatus == 0 ? kauth_cred_unref(originalUcred) : 0;
+	if (dropStatus != 0 || (unrefStatus != 0 && unrefStatus != ERANGE)) {
+		JBLogError("ucred replace retained old credential: ucred=0x%llx drop=%d unref=%d",
+			originalUcred, dropStatus, unrefStatus);
+	}
+	else if (unrefStatus == ERANGE) {
+		JBLogDebug("ucred replace retained final weak reference: ucred=0x%llx", originalUcred);
+	}
+	return 0;
+}
+
+int proc_copy_ucred(uint64_t procCopyFrom, uint64_t procCopyTo)
 {
 	if (!procCopyFrom || !procCopyTo) return EINVAL;
 	struct setid_proc_snapshot source = {
@@ -897,10 +968,13 @@ static int proc_copy_ucred(uint64_t procCopyFrom, uint64_t procCopyTo)
 	}
 	int dropStatus = kauth_cred_drop(originalUcred);
 	int unrefStatus = dropStatus == 0 ? kauth_cred_unref(originalUcred) : 0;
-	if (dropStatus != 0 || unrefStatus != 0) {
+	if (dropStatus != 0 || (unrefStatus != 0 && unrefStatus != ERANGE)) {
 		// A retained old credential is preferable to bypassing the kernel's
 		// SMR retirement path or rolling back an already-published pointer.
 		JBLogError("setid ucred copy retained old credential: drop=%d unref=%d", dropStatus, unrefStatus);
+	}
+	else if (unrefStatus == ERANGE) {
+		JBLogDebug("setid ucred copy retained final weak reference: ucred=0x%llx", originalUcred);
 	}
 	return 0;
 }

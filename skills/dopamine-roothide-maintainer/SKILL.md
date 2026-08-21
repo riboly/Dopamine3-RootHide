@@ -26,12 +26,14 @@ logic.
 3. Compare device paths with `DOBootstrapper.m`, `DOEnvironmentManager.m`, `libjailbreak`, `launchdhook`, and `systemhook` ownership boundaries.
 4. For a kernel panic, classify memory pressure separately from object-lifecycle corruption. Match panic `item/linkage/traits` against the exact XNU build before changing kernel writes.
 5. For iOS 18 credential changes, treat `ucred_rw.crw_weak_ref` as a 32-bit `os_ref_atomic_t`. Never perform a raw weak `1 -> 0`; that transition requires `kauth_cred_retire()` and SMR hash removal.
-6. Make the smallest change that preserves user data and existing RootHide invariants.
-7. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
-8. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
-9. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
-10. Validate on the device. For persistence fixes, capture source file names and checksums before reboot, then compare them after reboot and reactivation.
-11. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
+6. Do not modify a live shared `ucred` hash key in place on iOS 17+. UID/GID/groups, saved IDs, audit data, and MAC labels must come from a fully constructed donor credential or an immutable borrowed credential, published with balanced strong/weak references.
+7. Audit every credential path, not only the one present in the panic stack: initial privilege elevation, get/drop root, setuid check-in, root credential borrowing, sandbox changes, and finalization can share the same corrupted hash lifecycle.
+8. Make the smallest change that preserves user data and existing RootHide invariants.
+9. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
+10. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
+11. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
+12. Validate on the device. For persistence fixes, capture source file names and checksums before reboot, then compare them after reboot and reactivation.
+13. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
 
 ## Device Interpretation
 

@@ -8,7 +8,8 @@
 | --- | --- | --- |
 | 3.0.21 | 修复 RootHide setid donor 握手 | Sileo 源名称、更新、安装全部正常；Zebra 正常启动和使用 |
 | 3.0.22 | 修复重启后重新月余导致用户软件源丢失 | 用户已确认 `sileo.sources` 与 `roothide-release.sources` 生效，软件源持久化正常 |
-| 3.0.23 | 修复 iOS 18 `ucred` SMR 生命周期和异常 respring | GitHub 全量构建与产物核验通过；仍需设备覆盖安装、重新月余、respring 和稳定性观察 |
+| 3.0.23 | A1：修复 iOS 18 `ucred` 引用宽度、最终 weak release 和异常 respring | 构建通过，但 21:00 的有效新版本回归仍出现同类 `smr.c:2831` panic，A1 已被设备证伪为不完整 |
+| 3.0.24 | A2：禁止 iOS 17+ 原地修改 credential hash key，统一安全复制/替换 | 代码与构建验证进行中，尚未完成设备稳定性回归 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -287,7 +288,33 @@ BaseBin/libjailbreak/src/util.c
 UCRED-SMR-18A1
 ```
 
-### 设备验证
+### 3.0.23 设备回归结论
+
+3.0.23 已在设备上覆盖安装并重新月余。日志时间必须严格区分：
+
+```text
+panic-full-2026-08-21-193028.0002.ips  旧版本，仅作历史记录
+panic-full-2026-08-21-210019.0002.ips  3.0.23 有效回归
+```
+
+设备同时只读确认：
+
+```text
+/basebin/.version = 3.0.23
+/basebin/.build = 6cb051f303596048c63f74032d30f519c24fd632
+```
+
+21:00 日志仍然是：
+
+```text
+Unable to find item 0xffffffdd33bb5060
+(linkage 0xffffffdd33bb5070)
+@smr.c:2831
+```
+
+`linkage - item == 0x10` 仍指向 `ucred_rw.crw_link`。日志同时为 `Compressor 69% (OK)`、swap 正常、`memoryPressure=false`，再次排除内存爆满和普通用户态内存泄漏。结论是 A1 修正了引用计数错误，但没有消除所有 credential hash 损坏来源。
+
+### A1 原验证清单
 
 覆盖安装后重新月余，至少验证：
 
@@ -381,3 +408,55 @@ Not privileged to signal service.
 ```
 
 后续服务重启后 AFC2 生效。正确的长期修复是 AFC2 包更新 postinst 的服务域；Dopamine 不应为单个第三方包全局重写所有 `launchctl system/...` 请求。若未来实现通用域兼容层，必须逐个服务验证并禁止模糊匹配。
+
+## 13. 3.0.24：credential hash key 原地突变修复
+
+### A2 根因
+
+Apple XNU 的 `kauth_cred_ro_hash()` 不只依赖 `ucred_rw` 引用生命周期，还会把 credential 内容作为 hash key，包含：
+
+- `cr_posix` 中的 UID、GID、groups 和 saved IDs；
+- audit session；
+- 启用 MAC 时的 credential label。
+
+3.0.23 仍有多条路径在 credential 已进入 hash 后直接修改这些字段。对象留在旧 bucket，但退休时 XNU 根据突变后的新 key 删除，于是 `kauth_cred_retire()` 无法找到原 item 并在 `smr.c:2831` panic。这解释了为什么 A1 修正 weak/strong 引用后，同类 panic 仍能在 3.0.23 上复现。
+
+已确认的危险路径包括：
+
+```text
+Application/Dopamine/Jailbreak/DOJailbreaker.m
+BaseBin/launchdhook/src/jbserver/jbdomain_dopamine.c
+BaseBin/launchdhook/src/jbserver/jbdomain_systemwide.c
+BaseBin/launchdhook/src/jbserver/jbdomain_root.c
+Application/Dopamine/Jailbreak/DOEnvironmentManager.m
+```
+
+### A2 设计
+
+- `proc_copy_ucred()` 公开为公共安全复制接口；`proc_replace_ucred()` 为显式 credential 替换接口。
+- 新 credential 在发布前取得 weak 与 strong 引用，并在发布后读回目标指针、复核 PID/proc/ucred 身份。
+- 发布失败时，只有确认目标仍指向旧 credential 才撤销新引用；状态不确定时保留引用，避免悬空指针。
+- 释放旧 credential 时必须先 strong drop，成功后才 weak unref；weak `1 -> 0` 仍被禁止并有限保留。
+- Dopamine 初始提权与 finalize 直接借用不可变 kernel credential，不再写 UID/GID/groups 或 kernel MAC label。
+- Dopamine get/drop root 和 iOS 17+ setuid check-in 通过 donor 生成完整 credential，再原子式发布；real UID/GID 保持原值，只修改所需 effective ID 与 `groups[0]`。
+- Dopamine check-in 只更新 `proc.svuid/svgid`，不再写 `ucred.svuid/svgid`。
+- root 域临时 unsandbox 改为安全借用 kernel credential 并恢复，iOS 17+ 禁止旧 MAC label 原地修改接口。
+- iOS 16 及更旧系统保留旧兼容分支，缩小行为变化范围。
+
+产物标记：
+
+```text
+UCRED-SMR-18A2
+```
+
+### 3.0.24 回归要求
+
+构建核验必须确认版本 `3.0.24`、arm64/arm64e 切片、`UCRED-SMR-18A2` 和 `RESPRING-IOS18-BBD1` 都进入最终 TIPA。设备覆盖安装后：
+
+1. 确认 `/basebin/.version` 与 `/basebin/.build` 对应 3.0.24 产物。
+2. 验证 Sileo 刷新/安装、Zebra、OpenSSH、Frida、Dopamine get/drop root 与需要 unsandbox 的管理功能。
+3. 观察 jbserver 日志中是否出现 `donor-*`、`ucred replace`、`get-root` 或 `drop-root` 阶段错误。
+4. 正常使用并观察稳定性；只有足够观察期内不再产生同类 `ucred_rw` SMR panic，才能关闭该问题。
+5. respring、用户空间重启和手机重启均由用户自行触发；维护过程不得代为执行。
+
+3.0.24 当前仍是待构建、待设备验证状态，不能仅凭代码审查宣布 panic 已修复。

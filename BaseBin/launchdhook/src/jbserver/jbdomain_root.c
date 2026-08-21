@@ -5,6 +5,8 @@
 #include <libjailbreak/kernel.h>
 #include <libjailbreak/primitives.h>
 #include <libjailbreak/roothider.h>
+#include <libjailbreak/util.h>
+#include <errno.h>
 
 static bool root_domain_allowed(audit_token_t clientToken)
 {
@@ -28,8 +30,11 @@ static int root_get_sysinfo(xpc_object_t *sysInfoOut)
 
 static int root_steal_ucred(audit_token_t *clientToken, uint64_t ucred, uint64_t *orgUcred)
 {
+	if (orgUcred) *orgUcred = 0;
 	uint64_t kernproc = proc_find(0);
+	if (!kernproc) return ESRCH;
 	uint64_t kern_ucred = proc_ucred(kernproc);
+	if (!kern_ucred) return EFAULT;
 	if (!ucred) {
 		// Passing 0 to this means kernel ucred
 		ucred = kern_ucred;
@@ -37,20 +42,24 @@ static int root_steal_ucred(audit_token_t *clientToken, uint64_t ucred, uint64_t
 
 	pid_t pid = audit_token_to_pid(*clientToken);
 	uint64_t proc = proc_find(pid);
+	if (!proc) return ESRCH;
 
-	*orgUcred = proc_ucred(proc);
-	if (gSystemInfo.kernelStruct.proc_ro.exists) {
-		uint64_t proc_ro = kread_ptr(proc + koffsetof(proc, proc_ro));
-		kwrite64(proc_ro + koffsetof(proc_ro, ucred), ucred);
+	uint64_t originalUcred = 0;
+	int result = proc_replace_ucred(proc, ucred, &originalUcred);
+	if (result != 0) {
+		JBLogError("Root credential replacement failed pid=%d ucred=0x%llx result=%d",
+			pid, ucred, result);
+		return result;
 	}
-	else {
-		kwrite_ptr(proc + koffsetof(proc, ucred), ucred, 0x84E8);
-	}
+	if (orgUcred) *orgUcred = originalUcred;
 
 #ifndef __arm64e__
-	if (ucred == kern_ucred) {
+	if (__builtin_available(iOS 17.0, *)) {
+		// Credential labels are part of the iOS 17+ credential hash key.
+	}
+	else if (ucred == kern_ucred) {
 		// For some reason we need to borrow this from our process just for bind mount entitlement.
-		uint64_t our_label = kread_ptr(*orgUcred + koffsetof(ucred, label));
+		uint64_t our_label = kread_ptr(originalUcred + koffsetof(ucred, label));
 		uint64_t our_slot = mac_label_get(our_label, 0);
 		mac_label_set(kread_ptr(kern_ucred + koffsetof(ucred, label)), 0, our_slot);
 	}
@@ -65,6 +74,7 @@ static int root_steal_ucred(audit_token_t *clientToken, uint64_t ucred, uint64_t
 static int root_set_mac_label(audit_token_t *clientToken, uint64_t slot, uint64_t newLabel, uint64_t *orgLabel)
 {
 	if (slot >= 3) return -1;
+	if (__builtin_available(iOS 17.0, *)) return ENOTSUP;
 
 	pid_t pid = audit_token_to_pid(*clientToken);
 	uint64_t proc = proc_find(pid);
@@ -74,7 +84,7 @@ static int root_set_mac_label(audit_token_t *clientToken, uint64_t slot, uint64_
 
 	uint64_t label = kread_ptr(ucred + koffsetof(ucred, label));
 
-	*orgLabel = mac_label_get(label, slot);
+	if (orgLabel) *orgLabel = mac_label_get(label, slot);
 	mac_label_set(label, slot, newLabel);
 
 	return 0;

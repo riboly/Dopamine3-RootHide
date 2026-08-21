@@ -329,10 +329,17 @@ extern char **environ;
         unsandboxBlock();
     }
     else if([self isJailbroken]) {
-        uint64_t labelBackup = 0;
-        jbclient_root_set_mac_label(1, -1, &labelBackup);
+        uint64_t credentialBackup = 0;
+        int borrowResult = jbclient_root_steal_ucred(0, &credentialBackup);
+        if (borrowResult != 0) {
+            NSLog(@"Failed to borrow unsandboxed credential: %d", borrowResult);
+            return;
+        }
         unsandboxBlock();
-        jbclient_root_set_mac_label(1, labelBackup, NULL);
+        int restoreResult = jbclient_root_steal_ucred(credentialBackup, NULL);
+        if (restoreResult != 0) {
+            NSLog(@"Failed to restore credential after unsandboxed operation: %d", restoreResult);
+        }
     }
     else {
         // Hope that we are already unsandboxed

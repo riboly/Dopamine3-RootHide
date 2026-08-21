@@ -264,16 +264,45 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 	if (stat(procPath, &sb) == 0) {
 		if (S_ISREG(sb.st_mode) && (sb.st_mode & (S_ISUID | S_ISGID))) {
 			uint64_t ucred = proc_ucred(proc);
-			if ((sb.st_mode & (S_ISUID))) {
-				kwrite32(proc + koffsetof(proc, svuid), sb.st_uid);
-				kwrite32(ucred + koffsetof(ucred, svuid), sb.st_uid);
-				kwrite32(ucred + koffsetof(ucred, uid), sb.st_uid);
+			if (!ucred) {
+				proc_rele(proc);
+				return EFAULT;
 			}
-			if ((sb.st_mode & (S_ISGID))) {
-				kwrite32(proc + koffsetof(proc, svgid), sb.st_gid);
-				kwrite32(ucred + koffsetof(ucred, svgid), sb.st_gid);
-				kwrite32(ucred + koffsetof(ucred, groups), sb.st_gid);
+			if (__builtin_available(iOS 17.0, *)) {
+				gid_t groups[NGROUPS_MAX] = {0};
+				if (kreadbuf(ucred + koffsetof(ucred, groups), groups, sizeof(groups)) != 0) {
+					proc_rele(proc);
+					return EIO;
+				}
+				uid_t uid = (uid_t)kread32(ucred + koffsetof(ucred, uid));
+				gid_t gid = groups[0];
+				uid_t ruid = (uid_t)kread32(ucred + koffsetof(ucred, ruid));
+				gid_t rgid = (gid_t)kread32(ucred + koffsetof(ucred, rgid));
+				if (sb.st_mode & S_ISUID) uid = sb.st_uid;
+				if (sb.st_mode & S_ISGID) gid = sb.st_gid;
+				groups[0] = gid;
+				const char *failureStage = NULL;
+				int result = proc_ucred_update_content_with_stage(proc, procPath, uid, gid,
+					ruid, rgid, groups, &failureStage);
+				if (result != 0) {
+					JBLogError("Setuid check-in failed stage=%s pid=%d path=%s result=%d",
+						failureStage ?: "ucred-update", pid, procPath, result);
+					proc_rele(proc);
+					return result;
+				}
 			}
+			else {
+				if (sb.st_mode & S_ISUID) {
+					kwrite32(ucred + koffsetof(ucred, svuid), sb.st_uid);
+					kwrite32(ucred + koffsetof(ucred, uid), sb.st_uid);
+				}
+				if (sb.st_mode & S_ISGID) {
+					kwrite32(ucred + koffsetof(ucred, svgid), sb.st_gid);
+					kwrite32(ucred + koffsetof(ucred, groups), sb.st_gid);
+				}
+			}
+			if (sb.st_mode & S_ISUID) kwrite32(proc + koffsetof(proc, svuid), sb.st_uid);
+			if (sb.st_mode & S_ISGID) kwrite32(proc + koffsetof(proc, svgid), sb.st_gid);
 			uint32_t flag = kread32(proc + koffsetof(proc, flag));
 			if ((flag & P_SUGID) != 0) {
 				flag &= ~P_SUGID;
@@ -314,12 +343,9 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 	// For the Dopamine app itself we want to give it a saved uid/gid of 0, unsandbox it and give it CS_PLATFORM_BINARY
 	// This is so that the buttons inside it can work when jailbroken, even if the app was not installed by TrollStore
 	else if (is_dopamine_app(procPath)) {
-		// svuid = 0, svgid = 0
-		uint64_t ucred = proc_ucred(proc);
+		// proc saved IDs are not part of the shared ucred hash key.
 		kwrite32(proc + koffsetof(proc, svuid), 0);
-		kwrite32(ucred + koffsetof(ucred, svuid), 0);
 		kwrite32(proc + koffsetof(proc, svgid), 0);
-		kwrite32(ucred + koffsetof(ucred, svgid), 0);
 
 		// platformize
 		proc_csflags_set(proc, CS_PLATFORM_BINARY);
