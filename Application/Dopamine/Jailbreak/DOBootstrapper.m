@@ -795,6 +795,194 @@ NSString* jbrootPrefix(NSString *path);
 NSString* rootfsPrefix(NSString* path);
 ///////////////////////////////////////////////////////
 
+static NSError *RHDeleteBootstrapError(NSString *message)
+{
+    return [NSError errorWithDomain:bootstrapErrorDomain
+                               code:BootstrapErrorCodeFailedFinalising
+                           userInfo:@{NSLocalizedDescriptionKey : message}];
+}
+
+static BOOL RHIsDirectoryWithoutSymlink(NSString *path)
+{
+    struct stat st = {0};
+    return lstat(path.fileSystemRepresentation, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static BOOL RHIsRegularFileWithoutSymlink(NSString *path)
+{
+    struct stat st = {0};
+    return lstat(path.fileSystemRepresentation, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static BOOL RHPathExistsWithoutFollowingSymlink(NSString *path)
+{
+    struct stat st = {0};
+    return lstat(path.fileSystemRepresentation, &st) == 0;
+}
+
+static BOOL RHIsDopamineRootlessFolderName(NSString *name)
+{
+    BOOL isCurrentName = name.length == 15 && [name hasPrefix:@"dopamine-"];
+    BOOL isLegacyName = name.length == 9 && [name hasPrefix:@"jb-"];
+    if (!isCurrentName && !isLegacyName) return NO;
+
+    NSUInteger prefixLength = isCurrentName ? 9 : 3;
+    NSString *suffix = [name substringFromIndex:prefixLength];
+    NSCharacterSet *asciiAlphanumeric = [NSCharacterSet characterSetWithCharactersInString:
+        @"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"];
+    NSCharacterSet *nonAlphanumeric = [asciiAlphanumeric invertedSet];
+    return [suffix rangeOfCharacterFromSet:nonAlphanumeric].location == NSNotFound;
+}
+
+static BOOL RHIsForeignRootlessMarkerPresent(NSString *procursusPath)
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    return [fm fileExistsAtPath:[procursusPath stringByAppendingPathComponent:@".installed_nekojb"]] ||
+        [fm fileExistsAtPath:[procursusPath stringByAppendingPathComponent:@".palecursus_strapped"]] ||
+        [fm fileExistsAtPath:[procursusPath stringByAppendingPathComponent:@".xia0o0o0o_jb_installed"]];
+}
+
+static NSArray<NSDictionary *> *RHValidatedRootlessCandidates(NSError **errorOut)
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *activePrebootPath = [[DOEnvironmentManager sharedManager] activePrebootPath];
+    NSString *standardActivePath = activePrebootPath.stringByStandardizingPath;
+    if (!standardActivePath.length || ![standardActivePath hasPrefix:@"/private/preboot/"] ||
+        [standardActivePath containsString:@"/../"]) {
+        if (errorOut) *errorOut = RHDeleteBootstrapError(@"无法安全确定当前启动清单对应的月余根目录");
+        return nil;
+    }
+    if (!RHIsDirectoryWithoutSymlink(standardActivePath)) {
+        if (errorOut) *errorOut = RHDeleteBootstrapError(@"当前启动清单对应的 preboot 目录不存在");
+        return nil;
+    }
+
+    NSMutableArray<NSDictionary *> *candidates = [NSMutableArray array];
+    for (NSString *name in [fm contentsOfDirectoryAtPath:standardActivePath error:nil]) {
+        if (!RHIsDopamineRootlessFolderName(name)) continue;
+
+        NSString *parentPath = [standardActivePath stringByAppendingPathComponent:name];
+        if (!RHIsDirectoryWithoutSymlink(parentPath)) continue;
+
+        NSString *procursusPath = [parentPath stringByAppendingPathComponent:@"procursus"];
+        NSString *markerPath = [procursusPath stringByAppendingPathComponent:@".installed_dopamine"];
+        if (!RHIsDirectoryWithoutSymlink(procursusPath) ||
+            !RHIsRegularFileWithoutSymlink(markerPath) ||
+            RHIsForeignRootlessMarkerPresent(procursusPath)) {
+            continue;
+        }
+
+        [candidates addObject:@{
+            @"parent" : parentPath,
+            @"root" : procursusPath,
+        }];
+    }
+    return candidates;
+}
+
+static BOOL RHSecondaryRootMatchesPrimary(NSString *secondaryPath, NSString *primaryPath)
+{
+    NSString *linkPath = [secondaryPath stringByAppendingPathComponent:@".jbroot"];
+    NSString *destination = [NSFileManager.defaultManager destinationOfSymbolicLinkAtPath:linkPath error:nil];
+    if (!destination.length) return NO;
+
+    NSString *resolvedDestination = [destination hasPrefix:@"/"] ?
+        destination.stringByStandardizingPath :
+        [[secondaryPath stringByAppendingPathComponent:destination] stringByStandardizingPath];
+    NSString *standardPrimary = primaryPath.stringByStandardizingPath;
+    return [resolvedDestination isEqualToString:standardPrimary];
+}
+
+static NSArray<NSDictionary *> *RHValidatedRootHideCandidates(NSError **errorOut)
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *primaryDirectory = @"/var/containers/Bundle/Application";
+    NSString *secondaryDirectory = @"/var/mobile/Containers/Shared/AppGroup";
+    NSMutableArray<NSDictionary *> *candidates = [NSMutableArray array];
+
+    for (NSString *name in [fm contentsOfDirectoryAtPath:primaryDirectory error:nil]) {
+        if (!is_jbroot_name(name.UTF8String)) continue;
+
+        NSString *primaryPath = [primaryDirectory stringByAppendingPathComponent:name];
+        if (!RHIsDirectoryWithoutSymlink(primaryPath) ||
+            !RHIsRegularFileWithoutSymlink([primaryPath stringByAppendingPathComponent:@".installed_dopamine"])) {
+            continue;
+        }
+
+        NSMutableDictionary *candidate = [@{
+            @"root" : primaryPath,
+        } mutableCopy];
+        NSString *secondaryPath = [secondaryDirectory stringByAppendingPathComponent:name];
+        if (RHPathExistsWithoutFollowingSymlink(secondaryPath)) {
+            if (!RHIsDirectoryWithoutSymlink(secondaryPath) ||
+                !RHSecondaryRootMatchesPrimary(secondaryPath, primaryPath)) {
+                if (errorOut) {
+                    *errorOut = RHDeleteBootstrapError([NSString stringWithFormat:
+                        @"检测到无法确认归属的 RootHide 数据目录：%@", secondaryPath]);
+                }
+                return nil;
+            }
+            candidate[@"secondary"] = secondaryPath;
+        }
+        [candidates addObject:candidate];
+    }
+    return candidates;
+}
+
+static void RHUnregisterApplicationsAtRoot(NSString *rootPath)
+{
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *applicationsPath = [rootPath stringByAppendingPathComponent:@"Applications"];
+    NSString *uicachePath = [rootPath stringByAppendingPathComponent:@"usr/bin/uicache"];
+    if (![fm fileExistsAtPath:uicachePath]) return;
+
+    for (NSString *name in [fm contentsOfDirectoryAtPath:applicationsPath error:nil]) {
+        if (![name.pathExtension isEqualToString:@"app"]) continue;
+        NSString *appPath = [applicationsPath stringByAppendingPathComponent:name];
+        exec_cmd(uicachePath.fileSystemRepresentation, "-u", appPath.fileSystemRepresentation, NULL);
+    }
+}
+
+static NSError *RHValidateVarJbLink(NSArray<NSDictionary *> *candidates, NSString **linkPathOut)
+{
+    struct stat st = {0};
+    if (lstat("/var/jb", &st) != 0) {
+        if (errno == ENOENT) return nil;
+        return RHDeleteBootstrapError([NSString stringWithFormat:@"无法检查 /var/jb：%s", strerror(errno)]);
+    }
+    if (!S_ISLNK(st.st_mode)) {
+        return RHDeleteBootstrapError(@"/var/jb 不是符号链接，拒绝删除以避免误删系统目录");
+    }
+
+    NSString *destination = [NSFileManager.defaultManager destinationOfSymbolicLinkAtPath:@"/var/jb" error:nil];
+    if (!destination.length) {
+        return RHDeleteBootstrapError(@"无法解析 /var/jb 符号链接，拒绝继续");
+    }
+    NSString *varJbParent = [@"/var/jb" stringByDeletingLastPathComponent];
+    NSString *resolvedDestination = [destination hasPrefix:@"/"] ?
+        destination.stringByStandardizingPath :
+        [[varJbParent stringByAppendingPathComponent:destination] stringByStandardizingPath];
+
+    BOOL belongsToCandidate = NO;
+    for (NSDictionary *candidate in candidates) {
+        for (NSString *key in @[@"root", @"parent"]) {
+            NSString *candidatePath = [candidate[key] stringByStandardizingPath];
+            if ([resolvedDestination isEqualToString:candidatePath] ||
+                [resolvedDestination hasPrefix:[candidatePath stringByAppendingString:@"/"]]) {
+                belongsToCandidate = YES;
+                break;
+            }
+        }
+        if (belongsToCandidate) break;
+    }
+    if (!belongsToCandidate) {
+        return RHDeleteBootstrapError([NSString stringWithFormat:
+            @"/var/jb 指向未验证的路径 %@，拒绝删除", resolvedDestination]);
+    }
+    if (linkPathOut) *linkPathOut = @"/var/jb";
+    return nil;
+}
+
 uint64_t jbrand_new()
 {
     uint64_t value = ((uint64_t)arc4random()) | ((uint64_t)arc4random())<<32;
@@ -1001,8 +1189,12 @@ int getCFMajorVersion(void)
         if (isSileoListDirectory) {
             for (NSString *entry in [fm contentsOfDirectoryAtPath:directory error:nil]) {
                 NSString *entryPath = [directory stringByAppendingPathComponent:entry];
+                NSDictionary *entryAttributes = [fm attributesOfItemAtPath:entryPath error:nil];
+                if ([entryAttributes[NSFileType] isEqualToString:NSFileTypeDirectory]) {
+                    continue;
+                }
                 chown(entryPath.fileSystemRepresentation, owner, group);
-                chmod(entryPath.fileSystemRepresentation, 0755);
+                chmod(entryPath.fileSystemRepresentation, 0644);
             }
         }
     }
@@ -1587,31 +1779,49 @@ int getCFMajorVersion(void)
 
 - (NSError *)deleteBootstrap
 {
-    //jbrootPrefix() and jbrand_current() unavailable now
-    
-    NSError* error=nil;
-    NSFileManager* fm = NSFileManager.defaultManager;
-    
-    NSString* dirpath = @"/var/containers/Bundle/Application/";
-    for(NSString* item in [fm directoryContentsAtPath:dirpath])
-    {
-        if(is_jbroot_name(item.UTF8String)) {
-            STRAPLOG("remove %@ @ %@", item, dirpath);
-            if(![fm removeItemAtPath:[dirpath stringByAppendingPathComponent:item] error:&error])
-                return error;
-        }
+    // Validate every candidate and /var/jb before deleting anything. An
+    // ambiguous path aborts the whole operation so a partial cleanup cannot
+    // turn an unrelated preboot directory into collateral damage.
+    NSError *error = nil;
+    NSArray<NSDictionary *> *rootHideCandidates = RHValidatedRootHideCandidates(&error);
+    if (!rootHideCandidates) return error;
+
+    NSArray<NSDictionary *> *rootlessCandidates = RHValidatedRootlessCandidates(&error);
+    if (!rootlessCandidates) return error;
+
+    NSMutableArray<NSDictionary *> *allCandidates = [NSMutableArray arrayWithArray:rootHideCandidates];
+    [allCandidates addObjectsFromArray:rootlessCandidates];
+    NSString *varJbLink = nil;
+    error = RHValidateVarJbLink(allCandidates, &varJbLink);
+    if (error) return error;
+
+    NSFileManager *fm = NSFileManager.defaultManager;
+    for (NSDictionary *candidate in allCandidates) {
+        RHUnregisterApplicationsAtRoot(candidate[@"root"]);
     }
-    
-    dirpath = @"/var/mobile/Containers/Shared/AppGroup/";
-    for(NSString* item in [fm directoryContentsAtPath:dirpath])
-    {
-        if(is_jbroot_name(item.UTF8String)) {
-            STRAPLOG("remove %@ @ %@", item, dirpath);
-            if(![fm removeItemAtPath:[dirpath stringByAppendingPathComponent:item] error:&error])
-                return error;
+
+    for (NSDictionary *candidate in rootHideCandidates) {
+        NSString *secondaryPath = candidate[@"secondary"];
+        if (secondaryPath.length) {
+            STRAPLOG("remove validated RootHide data %@", secondaryPath);
+            if (![fm removeItemAtPath:secondaryPath error:&error]) return error;
         }
+
+        NSString *rootPath = candidate[@"root"];
+        STRAPLOG("remove validated RootHide root %@", rootPath);
+        if (![fm removeItemAtPath:rootPath error:&error]) return error;
     }
-    
+
+    for (NSDictionary *candidate in rootlessCandidates) {
+        NSString *parentPath = candidate[@"parent"];
+        STRAPLOG("remove validated rootless Dopamine root %@", parentPath);
+        if (![fm removeItemAtPath:parentPath error:&error]) return error;
+    }
+
+    if (varJbLink.length && ![fm removeItemAtPath:varJbLink error:&error]) {
+        return error;
+    }
+
     return nil;
 }
 

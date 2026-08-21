@@ -1187,7 +1187,17 @@ static void RHInstallFridaFromURL(NSURL *url)
 {
     UIAlertController *confirmationAlertController = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Alert_Remove_Jailbreak_Title") message:DOLocalizedString(@"Alert_Remove_Jailbreak_Pressed_Body") preferredStyle:UIAlertControllerStyleAlert];
     UIAlertAction *uninstallAction = [UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Continue") style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
-        [[DOEnvironmentManager sharedManager] deleteBootstrap];
+        NSError *error = [[DOEnvironmentManager sharedManager] deleteBootstrap];
+        if (error) {
+            UIAlertController *errorAlert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Log_Error")
+                                                                                message:error.localizedDescription
+                                                                         preferredStyle:UIAlertControllerStyleAlert];
+            [errorAlert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK")
+                                                           style:UIAlertActionStyleDefault
+                                                         handler:nil]];
+            [self presentViewController:errorAlert animated:YES completion:nil];
+            return;
+        }
         if ([DOEnvironmentManager sharedManager].isJailbroken) {
             [[DOEnvironmentManager sharedManager] reboot];
         }

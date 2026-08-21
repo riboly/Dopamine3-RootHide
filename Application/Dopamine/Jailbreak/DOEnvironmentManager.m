@@ -866,7 +866,10 @@ extern char **environ;
     if (![self isJailbroken] && getuid() != 0) {
         int r = [self runTrollStoreAction:@"delete-bootstrap"];
         if (r != 0) {
-            // TODO: maybe handle error
+            return [NSError errorWithDomain:bootstrapErrorDomain
+                                       code:BootstrapErrorCodeFailedFinalising
+                                   userInfo:@{NSLocalizedDescriptionKey :
+                                       [NSString stringWithFormat:@"删除月余环境失败，辅助进程退出码：%d", r]}];
         }
         return nil;
     }

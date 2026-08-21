@@ -120,22 +120,8 @@ xpc_object_t jbuserconfig_get_value(const char *key)
 	return NULL;
 }
 
-static bool is_apt_helper_path(const char *path)
-{
-	if (!path || strstr(path, "/apt/methods/") == NULL) return false;
-
-	// The gpgv method launches the apt-key shell script, so it must retain
-	// systemhook for RootHide path translation. Network transports stay native.
-	return !string_has_suffix(path, "/gpgv");
-}
-
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
-	if (is_apt_helper_path(path)) {
-		os_log_error(OS_LOG_DEFAULT, "[APTTRUST-7C37] trust-only APT transport path=%{public}s", path);
-		return kSpawnConfigTrust;
-	}
-
 	// Blacklist to ensure general system stability
 	// I don't like this but for some processes it seems neccessary
 	const char *processBlacklist[] = {
@@ -305,7 +291,10 @@ static int spawn_exec_hook_common(bool isExec,
 				}
 			}
 			if (!hasExecFlag && !isExec && getuid() != 0) {
-				struct _posix_spawn_persona_info *personaInfo = *(struct _posix_spawn_persona_info **)(attrStruct + POSIX_SPAWNATTR_OFF_PERSONA);
+				struct _posix_spawn_persona_info *personaInfo = NULL;
+				if (desc && desc->persona_info && desc->persona_info_size >= sizeof(*personaInfo)) {
+					personaInfo = desc->persona_info;
+				}
 				if (personaInfo) {
 					if (personaInfo->pspi_id == 99 && (personaInfo->pspi_flags & POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE)) {
 						if (personaInfo->pspi_flags & POSIX_SPAWN_PERSONA_UID) {

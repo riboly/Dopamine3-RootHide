@@ -17,7 +17,6 @@ int __execve(const char *path, char *const argv[], char *const envp[]);
 
 bool string_has_prefix(const char *str, const char* prefix);
 bool string_has_suffix(const char* str, const char* suffix);
-bool is_apt_transport_path(const char *path);
 
 int __posix_spawn_orig(pid_t *restrict pid, const char *restrict path, struct _posix_spawn_args_desc *desc, char *const argv[restrict], char * const envp[restrict]);
 int __execve_orig(const char *path, char *const argv[], char *const envp[]);

@@ -16,7 +16,11 @@ int main(int argc, char * argv[]) {
     if (argc >= 3) {
         if (!strcmp(argv[1], "trollstore")) {
             if (!strcmp(argv[2], "delete-bootstrap")) {
-                [[DOEnvironmentManager sharedManager] deleteBootstrap];
+                NSError *error = [[DOEnvironmentManager sharedManager] deleteBootstrap];
+                if (error) {
+                    NSLog(@"Failed to delete bootstrap: %@", error.localizedDescription);
+                    return 1;
+                }
             }
 /*
             else if (!strcmp(argv[2], "hide-jailbreak")) {

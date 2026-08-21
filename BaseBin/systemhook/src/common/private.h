@@ -41,7 +41,6 @@ int posix_spawnattr_getprocesstype_np(const posix_spawnattr_t * __restrict, int 
 #define POSIX_SPAWN_PERSONA_UID             POSIX_SPAWN_POSIX_CRED_UID
 #define POSIX_SPAWN_PERSONA_GID             POSIX_SPAWN_POSIX_CRED_GID
 #define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
-#define POSIX_SPAWNATTR_OFF_PERSONA 0xD8
 struct _posix_spawn_persona_info {
 	uid_t    pspi_id;       /* persona ID (unix UID) */
 	uint32_t pspi_flags;    /* spawn persona flags */
