@@ -529,4 +529,27 @@ Unable to find item ... (linkage item+0x10) @smr.c:2831
 UCRED-SMR-18A3
 ```
 
-3.0.25 当前仍需完成 GitHub Actions 全量构建、产物核验和用户设备首次激活验证。在设备验证成功前不能宣布回归已修复。
+### 3.0.25 构建记录
+
+GitHub Actions 全量构建：
+
+```text
+successful run: 32489768172
+source commit: 5df75d8eea563b422636c5feda7a9d6db62d7a48
+artifact id: 9449323835
+artifact: roothide-Dopamine-3.0.25-5df75d8.tipa
+artifact ZIP SHA-256: 10d2f23ac435801b0f7beea35b617257ebc60100dde970cf216beea059166d13
+TIPA SHA-256: 56ec0ac7133acc744cb8f146f5cf70ef536ec72454cd33f0ff8a91555c587661
+basebin.tar SHA-256: 81d69748475f90c8b9be03c1aaee8608d4c8369f0bf2fc3f88cc3175d45aafdb
+```
+
+核验结果：
+
+- GitHub artifact digest 与下载的外层 ZIP SHA-256 完全一致。
+- `Info.plist` 的 `CFBundleShortVersionString = 3.0.25`。
+- `basebin/.version = 3.0.25`，`basebin/.build` 与 source commit 完全一致。
+- `libjailbreak.dylib`、`systemhook.dylib`、`jbctl` 均包含 arm64 和 arm64e 切片。
+- `UCRED-SMR-18A3` 存在于 `libjailbreak.dylib` 双切片；`RESPRING-IOS18-BBD1` 存在于 `systemhook.dylib` 双切片。
+- artifact ZIP、TIPA 和内层 `basebin.tar` 均可完整枚举和解包。
+
+3.0.25 已通过源码与产物核验，仍需用户设备首次激活验证。在设备验证成功前不能宣布回归已修复。
