@@ -6,11 +6,13 @@
 #include <limits.h>
 #include <mach-o/dyld.h>
 #include <os/log.h>
+#include <signal.h>
 #include <sys/param.h>
 #include <unistd.h>
 #include <libjailbreak/setid_donor.h>
 
 static const char kTrustFlowBuildMarker[] __attribute__((used)) = "TRUSTFLOW-8A10";
+static const char kIOS18RespringFixMarker[] __attribute__((used)) = "RESPRING-IOS18-BBD1";
 
 struct setid_donor_request {
 	int controlFd;
@@ -583,6 +585,19 @@ roothide_init_with_checkin(JB_RootPath); // will hook dlopen* if necessary
 #endif
 
 	if (load_executable_path() == 0) {
+		if (__builtin_available(iOS 18.0, *)) {
+			if (path_has_suffix(gExecutablePath, "/usr/bin/sbreload")) {
+				// Keep third-party tools that invoke sbreload directly on the
+				// same iOS 18-safe path used by jbctl.
+				int status = killall_with_status("/usr/libexec/backboardd", SIGTERM);
+				if (status != 0) {
+					os_log_error(OS_LOG_DEFAULT, "[RESPRING-IOS18-BBD1] failed to terminate "
+						"backboardd status=%d uid=%d", status, getuid());
+				}
+				_exit(status);
+			}
+		}
+
 		// Load rootlesshooks / watchdoghook when neccessary
 		if (!strcmp(gExecutablePath, "/usr/sbin/cfprefsd") ||
 			!strcmp(gExecutablePath, "/System/Library/CoreServices/SpringBoard.app/SpringBoard") ||

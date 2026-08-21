@@ -7,7 +7,8 @@
 | 版本 | 变更 | 设备结果 |
 | --- | --- | --- |
 | 3.0.21 | 修复 RootHide setid donor 握手 | Sileo 源名称、更新、安装全部正常；Zebra 正常启动和使用 |
-| 3.0.22 | 修复重启后重新月余导致用户软件源丢失 | 代码与构建验证完成后，必须执行一次真实重启和重新月余回归 |
+| 3.0.22 | 修复重启后重新月余导致用户软件源丢失 | 用户已确认 `sileo.sources` 与 `roothide-release.sources` 生效，软件源持久化正常 |
+| 3.0.23 | 修复 iOS 18 `ucred` SMR 生命周期和异常 respring | 代码与构建验证后仍需设备覆盖安装、重新月余、respring 和稳定性观察 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -212,8 +213,149 @@ cat /etc/apt/sources.list.d/sileo.sources
 5. Zebra 自定义源仍存在且 Zebra 正常启动。
 6. 重启手机，再次重新月余后重复以上检查。
 
-只有完整通过一次设备重启循环，才能将源持久化问题标记为已解决。
+用户已完成设备验证，3.0.22 的源持久化问题已关闭。后续版本仍需保留本清单，防止引导重随机逻辑回归。
 
 ## 9. 月余检测结论
 
 此前“很多 App 仍检测到月余”不是旧 rootless 环境残留。用户在 RootHide 中为对应 App 打开隐藏开关后已完全解决，因此该方向已关闭，不需要添加 App 特定绕过，也不应清理 TrollStore/TrollFools 数据。
+
+## 10. 3.0.23：iOS 18 `ucred` SMR panic
+
+### 现象与排除项
+
+设备在月余后偶发自动重启，panic 为：
+
+```text
+Unable to find item 0xffffffded5077760
+(linkage 0xffffffded5077770)
+in 0xfffffff01937f5a8
+(traits 0xfffffff016a13a20)
+@smr.c:2831
+```
+
+设备为 iPhone XS Max（iPhone11,6），iOS 18.2.1（22C161），XNU 11215.62.3。panic task 是 `kernel_task`。日志同时显示：
+
+```text
+Compressor Info: 41% of compressed pages limit (OK)
+swap space OK
+memoryPressure=false
+```
+
+因此这不是内存耗尽，也没有证据支持普通用户态内存泄漏。
+
+### XNU 结构证据
+
+Apple XNU 11215.61.5 的 `struct ucred_rw` 布局为：
+
+```c
+struct ucred_rw {
+    os_ref_atomic_t         crw_weak_ref;
+    struct ucred           *crw_cred;
+    struct smrq_slink       crw_link;
+    struct smr_node         crw_node;
+};
+```
+
+panic 中 `linkage - item == 0x10`，正好等于 `crw_link` 在 `ucred_rw` 中的偏移。`kauth_cred_retire()` 会通过该 link 从 `kauth_cred_hash` 的 SMR hash 删除凭证。故障对象可确定为 `ucred_rw`，不是泛化的任意 SMR 容器。
+
+旧实现有两个违反 XNU 语义的问题：
+
+1. iOS 18 的 `crw_weak_ref` 是 32 位 `os_ref_atomic_t`，旧代码却用 64 位原子加减。
+2. weak ref 的最后一次 `1 -> 0` 必须进入 `kauth_cred_retire()`；裸 `atomic_fetch_sub` 会绕过 hash 删除和 SMR 延迟释放。
+
+### 修复
+
+- weak ref 使用 32 位 CAS，long-term `cr_ref` 使用 64 位 CAS。
+- 拒绝 0、溢出和裸 weak `1 -> 0`，不再绕过 XNU retirement。
+- donor 与目标 `proc/ucred` 在取得引用前、发布前和释放旧凭证前重新校验。
+- 新凭证引用或发布失败时停止并返回 `donor-ucred-copy`，不继续写 audit token。
+- 发布写入后读回目标指针；只有确认目标仍指向旧凭证时才回滚新引用，写入状态不确定时保留新引用，避免制造悬空 `ucred`。
+- strong drop 失败时不继续 weak unref，避免产生“强引用未释放、weak 却被提前减少”的不一致状态。
+- 新凭证已经发布后，如旧凭证不能安全释放，则保留旧引用并记录错误；有限保留优先于 SMR 损坏或危险回滚。
+
+主要文件：
+
+```text
+BaseBin/libjailbreak/src/kernel.c
+BaseBin/libjailbreak/src/kernel.h
+BaseBin/libjailbreak/src/util.c
+```
+
+产物标记：
+
+```text
+UCRED-SMR-18A1
+```
+
+### 设备验证
+
+覆盖安装后重新月余，至少验证：
+
+1. Sileo 刷新与安装、Zebra 启动、`sudo -n id` 等 root-spawn 路径仍正常。
+2. 多次正常安装/卸载小型软件包后没有 `donor-ucred-copy` 错误。
+3. 观察期内不再出现相同 `smr.c:2831` panic。
+4. 如仍有 panic，必须按新的 panic string 和 `item/linkage` 重新分类，不能直接归因于本次旧日志。
+
+## 11. iOS 18 respring 变成整机式重启
+
+### 证据链与规避范围
+
+`uikittools` 2.1.6 的 `sbreload` 先通过 `SBSRelaunchAction` 和 `FBSSystemService` 请求重启 render server，失败后才使用旧 launchd system handle 停止 SpringBoard/backboardd。该旧流程与 iOS 18.2.1 上报告的整机式重启现象吻合。
+
+Dopamine 的 `watchdoghook` 会拦截 userspace panic、进入 safe mode，并执行：
+
+```c
+reboot3(RB2_USERREBOOT);
+```
+
+这可以解释为何用户看到整机式用户空间重启，却没有 kernel panic 日志。但是当前没有取得对应时刻保存下来的 userspace-panic 日志，因此不能把 watchdog 链路写成已经日志证实的唯一根因。3.0.23 主动绕开可疑的旧 FrontBoard 流程，并保留错误状态用于设备验证。
+
+### 修复
+
+- `jbctl respring` 在 iOS 18+ 直接向 `backboardd` 发送 `SIGTERM`，不再执行旧 `sbreload` FrontBoard 流程。
+- systemhook 在 iOS 18+ 识别直接执行的 `/usr/bin/sbreload`，让 Sileo、Zebra、控制中心模块等第三方调用者走同一传统 respring 路径。
+- 两条路径都检查是否真正找到并成功发出信号；权限不足时返回非零并写日志，不再静默报告成功。
+- 修正 `killall()` 的参数缓冲区长度不匹配：缓冲区现在按传给 `KERN_PROCARGS2` 的 `KERN_ARGMAX` 分配，避免进程列表较小时发生用户态堆越界。
+- iOS 17 及更旧系统保留原行为，缩小兼容性影响范围。
+
+主要文件：
+
+```text
+BaseBin/jbctl/src/main.m
+BaseBin/systemhook/src/main.c
+```
+
+产物标记：
+
+```text
+RESPRING-IOS18-BBD1
+```
+
+该行为必须由用户明确触发测试。维护过程不得为了验证而自行重启 SpringBoard、用户空间或手机。
+
+## 12. AFC2 安装警告
+
+`com.cannathea.afc2d-arm64e` 1.1.7-21 的 `postinst` 为：
+
+```sh
+launchctl kill 9 system/com.apple.mobile.lockdown
+exit 0
+```
+
+iOS 18.2.1/RootHide 设备实际将服务显示在 `user/501` 域，`user/foreground/com.apple.mobile.lockdown` 可以解析；旧脚本写死 `system/...` 时，launchctl 会提示：
+
+```text
+Warning: Please switch to user/foreground/
+com.apple.mobile.lockdown service identifier
+Not privileged to signal service.
+```
+
+这不是 dpkg 安装失败。设备已确认包状态为 `install ok installed`，以下文件存在：
+
+```text
+/Library/MobileSubstrate/DynamicLibraries/afc2dService.dylib
+/Library/MobileSubstrate/DynamicLibraries/afc2dService.plist
+/usr/libexec/afc2d
+```
+
+后续服务重启后 AFC2 生效。正确的长期修复是 AFC2 包更新 postinst 的服务域；Dopamine 不应为单个第三方包全局重写所有 `launchctl system/...` 请求。若未来实现通用域兼容层，必须逐个服务验证并禁止模糊匹配。

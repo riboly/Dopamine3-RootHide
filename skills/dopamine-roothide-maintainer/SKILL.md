@@ -24,12 +24,14 @@ logic.
 1. Capture the exact device state and reproduce the narrow failure with read-only commands.
 2. Identify the shared subsystem before patching individual apps. Sileo and Zebra failures can both originate in RootHide path translation, root-spawn, permissions, or bootstrap re-randomization.
 3. Compare device paths with `DOBootstrapper.m`, `DOEnvironmentManager.m`, `libjailbreak`, `launchdhook`, and `systemhook` ownership boundaries.
-4. Make the smallest change that preserves user data and existing RootHide invariants.
-5. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
-6. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
-7. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
-8. Validate on the device. For persistence fixes, capture source file names and checksums before reboot, then compare them after reboot and reactivation.
-9. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
+4. For a kernel panic, classify memory pressure separately from object-lifecycle corruption. Match panic `item/linkage/traits` against the exact XNU build before changing kernel writes.
+5. For iOS 18 credential changes, treat `ucred_rw.crw_weak_ref` as a 32-bit `os_ref_atomic_t`. Never perform a raw weak `1 -> 0`; that transition requires `kauth_cred_retire()` and SMR hash removal.
+6. Make the smallest change that preserves user data and existing RootHide invariants.
+7. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
+8. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
+9. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
+10. Validate on the device. For persistence fixes, capture source file names and checksums before reboot, then compare them after reboot and reactivation.
+11. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
 
 ## Device Interpretation
 
@@ -42,6 +44,14 @@ together under:
 
 Do not infer data loss from the absence of `/var/jb`. Resolve the active brand
 and inspect the virtual `/etc/apt` and `/var/mobile` views instead.
+
+## Service And Respring Triage
+
+- Read package `postinst` before treating red launchctl output as an install failure. An explicit `exit 0` plus `dpkg-query` state and installed files can prove installation succeeded while service reload failed.
+- On iOS 18, inspect `launchctl print user/foreground/<label>` as well as `system/<label>`. Do not add a global domain rewrite for one third-party package.
+- A respring that looks like a phone reboot without a kernel panic can be Dopamine converting a watchdog userspace panic into `RB2_USERREBOOT`. Inspect `watchdoghook`, the caller's `sbreload` implementation, and any saved userspace-panic state.
+- When enumerating `KERN_PROCARGS2`, allocate the argument buffer using the same `KERN_ARGMAX` value passed as the sysctl output size. Process-list byte length is not a safe substitute.
+- Never trigger respring, service termination, userspace reboot, or phone reboot merely to reproduce a report. Obtain explicit authorization for that action.
 
 ## Completion Criteria
 

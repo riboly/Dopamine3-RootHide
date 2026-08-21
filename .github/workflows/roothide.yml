@@ -157,6 +157,7 @@ jobs:
           cp BaseBin/systemhook/systemhook.dylib artifacts/systemhook.dylib
           file artifacts/systemhook.dylib
           strings artifacts/systemhook.dylib | grep -F "TRUSTFLOW-8A10"
+          strings artifacts/systemhook.dylib | grep -F "RESPRING-IOS18-BBD1"
 
       - name: Full build TIPA
         if: env.BUILD_MODE == 'full'
@@ -183,6 +184,9 @@ jobs:
             done < <(grep -E 'error:|fatal error:|make: \*\*\*|ld: error:' "$build_log" | tail -n 20 || true)
             exit "$build_status"
           fi
+
+          strings BaseBin/.build/libjailbreak.dylib | grep -F "UCRED-SMR-18A1"
+          strings BaseBin/.build/systemhook.dylib | grep -F "RESPRING-IOS18-BBD1"
 
           version="$(cat BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)"
           artifact="roothide-Dopamine-${version}.tipa"

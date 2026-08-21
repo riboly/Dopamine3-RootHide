@@ -5,7 +5,10 @@
 #include "util.h"
 #include "codesign.h"
 #include <dispatch/dispatch.h>
+#include <errno.h>
 #include <stdatomic.h>
+
+static const char kUcredSmrFixMarker[] __attribute__((used)) = "UCRED-SMR-18A1";
 
 uint64_t proc_find(pid_t pidToFind)
 {
@@ -238,62 +241,87 @@ uint64_t kauth_cred_rw(uint64_t cred)
 	return 0;
 }
 
-void kauth_cred_ref(uint64_t ucred)
+#define KAUTH_CRED_REF_MAX 0x0fffffffU
+
+static int kauth_cred_adjust32(uint64_t address, int delta, bool allowZero)
 {
-	uint64_t refcntPtr = 0;
+	if (!address || (delta != 1 && delta != -1)) return EINVAL;
+	__block int status = 0;
+	int mapStatus = kaccess_mapped(address, sizeof(uint32_t), ^(void *ptr) {
+		_Atomic(uint32_t) *counter = ptr;
+		uint32_t current = atomic_load_explicit(counter, memory_order_seq_cst);
+		for (;;) {
+			if ((delta > 0 && ((!allowZero && current == 0) || current >= KAUTH_CRED_REF_MAX)) ||
+				(delta < 0 && (current == 0 || (!allowZero && current == 1)))) {
+				status = delta > 0 ? EOVERFLOW : ERANGE;
+				break;
+			}
+			uint32_t desired = delta > 0 ? current + 1 : current - 1;
+			if (atomic_compare_exchange_weak_explicit(counter, &current, desired,
+				memory_order_seq_cst, memory_order_seq_cst)) break;
+		}
+	});
+	if (mapStatus != 0) return mapStatus > 0 ? mapStatus : EIO;
+	return status;
+}
+
+static int kauth_cred_adjust64(uint64_t address, int delta, bool allowZero)
+{
+	if (!address || (delta != 1 && delta != -1)) return EINVAL;
+	__block int status = 0;
+	int mapStatus = kaccess_mapped(address, sizeof(uint64_t), ^(void *ptr) {
+		_Atomic(uint64_t) *counter = ptr;
+		uint64_t current = atomic_load_explicit(counter, memory_order_seq_cst);
+		for (;;) {
+			if ((delta > 0 && ((!allowZero && current == 0) || current >= KAUTH_CRED_REF_MAX)) ||
+				(delta < 0 && (current == 0 || (!allowZero && current == 1)))) {
+				status = delta > 0 ? EOVERFLOW : ERANGE;
+				break;
+			}
+			uint64_t desired = delta > 0 ? current + 1 : current - 1;
+			if (atomic_compare_exchange_weak_explicit(counter, &current, desired,
+				memory_order_seq_cst, memory_order_seq_cst)) break;
+		}
+	});
+	if (mapStatus != 0) return mapStatus > 0 ? mapStatus : EIO;
+	return status;
+}
+
+static int kauth_cred_reference_adjust(uint64_t ucred, int delta)
+{
+	if (!ucred) return EINVAL;
 	if (gSystemInfo.kernelStruct.ucred_rw.exists) {
 		uint64_t ucred_rw = kauth_cred_rw(ucred);
-		refcntPtr = ucred_rw + koffsetof(ucred_rw, weak_ref);
+		if (!ucred_rw) return EFAULT;
+		// The iOS 18 weak reference is 32-bit. Its final release must run
+		// kauth_cred_retire(), so a raw 1 -> 0 transition is never safe.
+		return kauth_cred_adjust32(ucred_rw + koffsetof(ucred_rw, weak_ref), delta, false);
 	}
-	else {
-		refcntPtr = ucred + koffsetof(ucred, ref);
-	}
-
-	kaccess_mapped(refcntPtr, sizeof(uint64_t), ^(void *ptr){
-		_Atomic(uint64_t) *uintPtr = ptr;
-		atomic_fetch_add(uintPtr, 1);
-	});
+	return kauth_cred_adjust64(ucred + koffsetof(ucred, ref), delta, false);
 }
 
-void kauth_cred_unref(uint64_t ucred)
+int kauth_cred_ref(uint64_t ucred)
 {
-	uint64_t refcntPtr = 0;
-	if (gSystemInfo.kernelStruct.ucred_rw.exists) {
-		uint64_t ucred_rw = kauth_cred_rw(ucred);
-		refcntPtr = ucred_rw + koffsetof(ucred_rw, weak_ref);
-	}
-	else {
-		refcntPtr = ucred + koffsetof(ucred, ref);
-	}
-
-	kaccess_mapped(refcntPtr, sizeof(uint64_t), ^(void *ptr){
-		_Atomic(uint64_t) *uintPtr = ptr;
-		atomic_fetch_sub(uintPtr, 1);
-	});
+	return kauth_cred_reference_adjust(ucred, 1);
 }
 
-void kauth_cred_hold(uint64_t ucred)
+int kauth_cred_unref(uint64_t ucred)
 {
-	if (gSystemInfo.kernelStruct.ucred_rw.exists) {
-		uint64_t refcntPtr = ucred + koffsetof(ucred, ref);
-
-		kaccess_mapped(refcntPtr, sizeof(uint64_t), ^(void *ptr){
-			_Atomic(uint64_t) *uintPtr = ptr;
-			atomic_fetch_add(uintPtr, 1);
-		});
-	}
+	return kauth_cred_reference_adjust(ucred, -1);
 }
 
-void kauth_cred_drop(uint64_t ucred)
+int kauth_cred_hold(uint64_t ucred)
 {
-	if (gSystemInfo.kernelStruct.ucred_rw.exists) {
-		uint64_t refcntPtr = ucred + koffsetof(ucred, ref);
-		
-		kaccess_mapped(refcntPtr, sizeof(uint64_t), ^(void *ptr){
-			_Atomic(uint64_t) *uintPtr = ptr;
-			atomic_fetch_sub(uintPtr, 1);
-		});
-	}
+	if (!ucred) return EINVAL;
+	if (!gSystemInfo.kernelStruct.ucred_rw.exists) return 0;
+	return kauth_cred_adjust64(ucred + koffsetof(ucred, ref), 1, true);
+}
+
+int kauth_cred_drop(uint64_t ucred)
+{
+	if (!ucred) return EINVAL;
+	if (!gSystemInfo.kernelStruct.ucred_rw.exists) return 0;
+	return kauth_cred_adjust64(ucred + koffsetof(ucred, ref), -1, true);
 }
 
 int pmap_cs_allow_invalid(uint64_t pmap)

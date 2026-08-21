@@ -799,29 +799,110 @@ int jbctl_earlyboot(mach_port_t earlyBootServer, ...)
 	return cmd_wait_for_exit(spawnedPid);
 }
 
-void proc_ucred_update(uint64_t proc, uint64_t newUcred)
+static int proc_ucred_update(uint64_t proc, uint64_t newUcred, uint64_t *observedUcredOut)
 {
+	if (observedUcredOut) *observedUcredOut = 0;
+	if (!proc || !newUcred) return EINVAL;
+	int status = 0;
 	if (gSystemInfo.kernelStruct.proc_ro.exists) {
 		uint64_t proc_ro = kread_ptr(proc + koffsetof(proc, proc_ro));
-		kwrite64(proc_ro + koffsetof(proc_ro, ucred), newUcred);
+		if (!proc_ro) return EFAULT;
+		status = kwrite64(proc_ro + koffsetof(proc_ro, ucred), newUcred);
 	}
 	else {
-		kwrite_ptr(proc + koffsetof(proc, ucred), newUcred, 0x84E8);
+		status = kwrite_ptr(proc + koffsetof(proc, ucred), newUcred, 0x84E8);
 	}
+	uint64_t observedUcred = proc_ucred(proc);
+	if (observedUcredOut) *observedUcredOut = observedUcred;
+	if (observedUcred == newUcred) return 0;
+	return status > 0 ? status : EIO;
 }
 
-static void proc_copy_ucred(uint64_t procCopyFrom, uint64_t procCopyTo)
+struct setid_proc_snapshot {
+	pid_t pid;
+	uint64_t proc;
+	uint64_t ucred;
+};
+
+static int setid_validate_copy_state(const char *phase,
+	const struct setid_proc_snapshot *source,
+	const struct setid_proc_snapshot *target)
 {
-	uint64_t ucredToCopy = proc_ucred(procCopyFrom);
-	uint64_t originalUcred = proc_ucred(procCopyTo);
-	if (!ucredToCopy || !originalUcred || ucredToCopy == originalUcred) return;
+	uint64_t sourceProc = proc_find(source->pid);
+	uint64_t targetProc = proc_find(target->pid);
+	uint64_t sourceUcred = sourceProc ? proc_ucred(sourceProc) : 0;
+	uint64_t targetUcred = targetProc ? proc_ucred(targetProc) : 0;
+	if (sourceProc == source->proc && sourceUcred == source->ucred &&
+		targetProc == target->proc && targetUcred == target->ucred) return 0;
+	JBLogError("setid ucred copy failed phase=%s source-pid=%d source-proc=0x%llx/0x%llx "
+		"source-ucred=0x%llx/0x%llx target-pid=%d target-proc=0x%llx/0x%llx "
+		"target-ucred=0x%llx/0x%llx", phase, source->pid, source->proc, sourceProc,
+		source->ucred, sourceUcred, target->pid, target->proc, targetProc,
+		target->ucred, targetUcred);
+	return ESRCH;
+}
+
+static int proc_copy_ucred(uint64_t procCopyFrom, uint64_t procCopyTo)
+{
+	if (!procCopyFrom || !procCopyTo) return EINVAL;
+	struct setid_proc_snapshot source = {
+		.pid = kread32(procCopyFrom + koffsetof(proc, pid)),
+		.proc = procCopyFrom,
+		.ucred = proc_ucred(procCopyFrom),
+	};
+	struct setid_proc_snapshot target = {
+		.pid = kread32(procCopyTo + koffsetof(proc, pid)),
+		.proc = procCopyTo,
+		.ucred = proc_ucred(procCopyTo),
+	};
+	if (!source.ucred || !target.ucred) return EFAULT;
+	int status = setid_validate_copy_state("new-reference", &source, &target);
+	if (status != 0 || source.ucred == target.ucred) return status;
+	uint64_t originalUcred = target.ucred;
 
 	// Publish a fully referenced credential before releasing the old one.
-	kauth_cred_ref(ucredToCopy);
-	kauth_cred_hold(ucredToCopy);
-	proc_ucred_update(procCopyTo, ucredToCopy);
-	kauth_cred_drop(originalUcred);
-	kauth_cred_unref(originalUcred);
+	status = kauth_cred_ref(source.ucred);
+	if (status != 0) return status;
+	status = kauth_cred_hold(source.ucred);
+	if (status != 0) {
+		(void)kauth_cred_unref(source.ucred);
+		return status;
+	}
+	status = setid_validate_copy_state("publish", &source, &target);
+	if (status != 0) {
+		if (kauth_cred_drop(source.ucred) == 0) (void)kauth_cred_unref(source.ucred);
+		return status;
+	}
+	uint64_t observedUcred = 0;
+	status = proc_ucred_update(procCopyTo, source.ucred, &observedUcred);
+	if (status != 0) {
+		// Only undo the new references when the target is confirmed to still
+		// point at the old credential. An unknown publication state must retain
+		// the new pair rather than risk leaving a dangling proc credential.
+		if (observedUcred == originalUcred && kauth_cred_drop(source.ucred) == 0) {
+			(void)kauth_cred_unref(source.ucred);
+		}
+		JBLogError("setid ucred copy failed phase=publish-write target-proc=0x%llx "
+			"new-ucred=0x%llx observed-ucred=0x%llx status=%d", procCopyTo,
+			source.ucred, observedUcred, status);
+		return status;
+	}
+
+	target.ucred = source.ucred;
+	status = setid_validate_copy_state("release-old", &source, &target);
+	if (status != 0) {
+		// The new credential is already published. Do not risk touching an
+		// old credential after either naked proc pointer changed identity.
+		return status;
+	}
+	int dropStatus = kauth_cred_drop(originalUcred);
+	int unrefStatus = dropStatus == 0 ? kauth_cred_unref(originalUcred) : 0;
+	if (dropStatus != 0 || unrefStatus != 0) {
+		// A retained old credential is preferable to bypassing the kernel's
+		// SMR retirement path or rolling back an already-published pointer.
+		JBLogError("setid ucred copy retained old credential: drop=%d unref=%d", dropStatus, unrefStatus);
+	}
+	return 0;
 }
 
 // Build a credential-bearing helper process and copy its ucred onto the
@@ -936,10 +1017,14 @@ int proc_ucred_update_content_with_stage(uint64_t proc, const char *procPath, ui
 			cmd_wait_for_exit(childPid);
 			return ESRCH;
 		}
-		proc_copy_ucred(childProc, proc);
+		int copyStatus = proc_copy_ucred(childProc, proc);
 		proc_rele(childProc);
 		kill(childPid, SIGKILL);
 		cmd_wait_for_exit(childPid);
+		if (copyStatus != 0) {
+			if (failureStageOut) *failureStageOut = "donor-ucred-copy";
+			return copyStatus;
+		}
 	}
 	else {
 		uint64_t ucred = proc_ucred(proc);
@@ -967,8 +1052,9 @@ int proc_ucred_update_content(uint64_t proc, const char *procPath, uid_t uid, gi
 	return proc_ucred_update_content_with_stage(proc, procPath, uid, gid, ruid, rgid, groups, NULL);
 }
 
-void killall(const char *executablePath, int signal)
+int killall_with_status(const char *executablePath, int signal)
 {
+	if (!executablePath || signal <= 0) return EINVAL;
 	static int maxArgumentSize = 0;
 	if (maxArgumentSize == 0) {
 		size_t size = sizeof(maxArgumentSize);
@@ -981,14 +1067,23 @@ void killall(const char *executablePath, int signal)
 	struct kinfo_proc *info;
 	size_t length;
 	int count;
+	int matched = 0;
+	int signaled = 0;
+	int firstError = 0;
 	
 	if (sysctl(mib, 3, NULL, &length, NULL, 0) < 0)
-		return;
+		return errno;
 	if (!(info = malloc(length)))
-		return;
+		return ENOMEM;
 	if (sysctl(mib, 3, info, &length, NULL, 0) < 0) {
+		int status = errno;
 		free(info);
-		return;
+		return status;
+	}
+	char *buffer = malloc((size_t)maxArgumentSize);
+	if (!buffer) {
+		free(info);
+		return ENOMEM;
 	}
 	count = length / sizeof(struct kinfo_proc);
 	for (int i = 0; i < count; i++) {
@@ -997,16 +1092,26 @@ void killall(const char *executablePath, int signal)
 			continue;
 		}
 		size_t size = maxArgumentSize;
-		char* buffer = (char *)malloc(length);
-		if (sysctl((int[]){ CTL_KERN, KERN_PROCARGS2, pid }, 3, buffer, &size, NULL, 0) == 0) {
+		if (sysctl((int[]){ CTL_KERN, KERN_PROCARGS2, pid }, 3, buffer, &size, NULL, 0) == 0 &&
+			size > sizeof(int) && memchr(buffer + sizeof(int), '\0', size - sizeof(int))) {
 			char *cExecutablePath = buffer + sizeof(int);
 			if (strcmp(cExecutablePath, executablePath) == 0) {
-				kill(pid, signal);
+				matched++;
+				if (kill(pid, signal) == 0) signaled++;
+				else if (firstError == 0) firstError = errno;
 			}
 		}
-		free(buffer);
 	}
+	free(buffer);
 	free(info);
+	if (signaled > 0) return 0;
+	if (firstError != 0) return firstError;
+	return matched > 0 ? EIO : ESRCH;
+}
+
+void killall(const char *executablePath, int signal)
+{
+	(void)killall_with_status(executablePath, signal);
 }
 
 static int

@@ -51,6 +51,7 @@ int proc_ucred_update_content(uint64_t proc, const char *procPath, uid_t uid, gi
 int proc_ucred_update_content_with_stage(uint64_t proc, const char *procPath, uid_t uid, gid_t gid, uid_t ruid, gid_t rgid, gid_t groups[NGROUPS_MAX], const char **failureStageOut);
 
 void killall(const char *executablePath, int signal);
+int killall_with_status(const char *executablePath, int signal);
 int libarchive_unarchive(const char *fileToExtract, const char *extractionPath);
 
 void thread_caffeinate_start(void);

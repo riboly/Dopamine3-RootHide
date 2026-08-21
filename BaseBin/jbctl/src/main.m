@@ -6,6 +6,7 @@
 
 #import <Foundation/Foundation.h>
 #import <CoreServices/LSApplicationProxy.h>
+#include <signal.h>
 
 @interface LSApplicationWorkspace : NSObject
 + (instancetype)defaultWorkspace;
@@ -257,6 +258,13 @@ int main(int argc, char* argv[])
 		return reboot3(RB2_USERREBOOT);
 	}
 	else if (!strcmp(cmd, "respring")) {
+		if (__builtin_available(iOS 18.0, *)) {
+			// uikittools 2.1.6 uses an obsolete FrontBoard relaunch path that
+			// is consistent with the reported watchdog/userspace-reboot path.
+			int status = killall_with_status("/usr/libexec/backboardd", SIGTERM);
+			if (status != 0) fprintf(stderr, "Failed to terminate backboardd: %s\n", strerror(status));
+			return status;
+		}
 		const char *sbreloadPath = JBROOT_PATH("/usr/bin/sbreload");
 		if (execve(sbreloadPath, (char *[]){ (char *)sbreloadPath, NULL }, environ) != 0) {
 			killall("/usr/libexec/backboardd", SIGTERM);
