@@ -185,7 +185,7 @@ jobs:
             exit "$build_status"
           fi
 
-          strings BaseBin/.build/libjailbreak.dylib | grep -F "UCRED-SMR-18A3"
+          strings BaseBin/.build/libjailbreak.dylib | grep -F "UCRED-SMR-18A5"
           strings BaseBin/.build/systemhook.dylib | grep -F "RESPRING-IOS18-BBD1"
 
           version="$(cat BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)"

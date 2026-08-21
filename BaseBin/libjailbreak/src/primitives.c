@@ -148,6 +148,14 @@ int physwritebuf(uint64_t physaddr, const void* input, size_t size)
 	return -1;
 }
 
+int physaccess_mapped(uint64_t physaddr, uint64_t size, kernel_map_accessor accessorBlock)
+{
+	if (gPrimitives.physaccess_mapped) {
+		return gPrimitives.physaccess_mapped(physaddr, size, accessorBlock);
+	}
+	return -1;
+}
+
 int vreadbuf(uint64_t tte_p, const void *addr, void *outdata, size_t datalen)
 {
 	__block bool success = true;

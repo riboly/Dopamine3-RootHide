@@ -10,6 +10,7 @@
 #import "DOExploitManager.h"
 #import "DOUIManager.h"
 #import <sys/stat.h>
+#import <fcntl.h>
 #import <compression.h>
 #import <xpf/xpf.h>
 #import <dlfcn.h>
@@ -45,6 +46,23 @@ CFDictionaryRef _CFPreferencesCopyMultipleWithContainer(CFArrayRef keysToFetch, 
 //char *_dirhelper(int a, char *dst, size_t size);
 
 static uint64_t gPinnedActivationUcred = 0;
+static int gPrivilegeElevationStageFd = -1;
+
+static void DOSetPrivilegeElevationStage(NSString *stage)
+{
+    if (gPrivilegeElevationStageFd < 0) {
+        NSString *stagePath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches/privilege-elevation-stage.log"];
+        gPrivilegeElevationStageFd = open(stagePath.fileSystemRepresentation, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    }
+    if (gPrivilegeElevationStageFd >= 0) {
+        NSData *stageData = [[stage stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
+        lseek(gPrivilegeElevationStageFd, 0, SEEK_SET);
+        ftruncate(gPrivilegeElevationStageFd, 0);
+        write(gPrivilegeElevationStageFd, stageData.bytes, stageData.length);
+        fsync(gPrivilegeElevationStageFd);
+    }
+    NSLog(@"Privilege elevation stage: %@", stage);
+}
 
 NSString *const JBErrorDomain = @"JBErrorDomain";
 typedef NS_ENUM(NSInteger, JBErrorCode) {
@@ -246,6 +264,11 @@ sets[idx] = NULL;
 
 - (NSError *)elevatePrivileges
 {
+    NSString *stagePath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches/privilege-elevation-stage.log"];
+    NSString *previousStage = [NSString stringWithContentsOfFile:stagePath encoding:NSUTF8StringEncoding error:nil];
+    if (previousStage.length) NSLog(@"Previous privilege elevation stage: %@", [previousStage stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
+    DOSetPrivilegeElevationStage(@"begin");
+
     uint64_t proc = proc_self();
     uint64_t ucred = proc ? proc_ucred(proc) : 0;
     if (!proc || !ucred) {
@@ -257,25 +280,23 @@ sets[idx] = NULL;
     }
 
     // The first activation runs before launchdhook can create a donor credential.
-    // Pin this process' credential for the rest of the boot before changing its
-    // hash key. The bounded leak prevents XNU from ever retiring the mutated
-    // credential and is preferable to borrowing kernproc's full GUI identity.
+    // Pin only the mutable ucred_rw weak reference before changing the hash key.
+    // This prevents retirement without writing the ZC_READONLY cr_ref field.
     if (gPinnedActivationUcred != ucred) {
+        DOSetPrivilegeElevationStage(@"before-weak-pin");
         int pinResult = kauth_cred_ref(ucred);
-        if (pinResult == 0) {
-            pinResult = kauth_cred_hold(ucred);
-            if (pinResult != 0) (void)kauth_cred_unref(ucred);
-        }
         if (pinResult != 0) {
             return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to pin credentials for privilege elevation: %d", pinResult]}];
         }
         gPinnedActivationUcred = ucred;
+        DOSetPrivilegeElevationStage(@"after-weak-pin");
     }
     if (proc_ucred(proc) != ucred) {
         return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:@"Credentials changed while preparing privilege elevation"}];
     }
 
-    // Get uid 0. This credential must not be released after these writes.
+    DOSetPrivilegeElevationStage(@"before-posix-writes");
+    // Get uid 0. This credential must not be retired after these writes.
     kwrite32(proc + koffsetof(proc, svuid), 0);
     kwrite32(ucred + koffsetof(ucred, svuid), 0);
     kwrite32(ucred + koffsetof(ucred, ruid), 0);
@@ -296,13 +317,16 @@ sets[idx] = NULL;
     
     if (getuid() != 0) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to get root, uid still %d", getuid()]}];
     if (getgid() != 0) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to get root, gid still %d", getgid()]}];
+    DOSetPrivilegeElevationStage(@"after-posix-writes");
 
     // Unsandbox the pinned credential. Its MAC label is also part of the hash
     // key, so it must remain pinned together with the POSIX identity above.
+    DOSetPrivilegeElevationStage(@"before-mac-label");
     mac_label_set(label, 1, -1);
     NSError *error = nil;
     [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/var" error:&error];
     if (error) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedUnsandbox userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to unsandbox, /var does not seem accessible (%s)", error.description.UTF8String]}];
+    DOSetPrivilegeElevationStage(@"after-mac-label");
     setenv("HOME", "/var/root", true);
     setenv("CFFIXED_USER_HOME", "/var/root", true);
     setenv("TMPDIR", "/var/tmp", true);
@@ -341,7 +365,8 @@ sets[idx] = NULL;
         return [NSError errorWithDomain:@"RootHide" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Your device currently has another jailbreak activated, please reboot device."}];
     }
 /***********************************************************************/
-    
+
+    DOSetPrivilegeElevationStage(@"complete");
     return nil;
 }
 

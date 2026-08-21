@@ -9,7 +9,9 @@
 | 3.0.21 | 修复 RootHide setid donor 握手 | Sileo 源名称、更新、安装全部正常；Zebra 正常启动和使用 |
 | 3.0.22 | 修复重启后重新月余导致用户软件源丢失 | 用户已确认 `sileo.sources` 与 `roothide-release.sources` 生效，软件源持久化正常 |
 | 3.0.23 | A1：修复 iOS 18 `ucred` 引用宽度、最终 weak release 和异常 respring | 构建通过，但 21:00 的有效新版本回归仍出现同类 `smr.c:2831` panic，A1 已被设备证伪为不完整 |
-| 3.0.24 | A2：禁止 iOS 17+ 原地修改 credential hash key，统一安全复制/替换 | GitHub 全量构建与产物核验通过，尚未完成设备稳定性回归 |
+| 3.0.24 | A2：禁止 iOS 17+ 原地修改 credential hash key，统一安全复制/替换 | 设备首次激活在 `kauth_cred_reference_adjust()` 中 SIGSEGV，不能使用 |
+| 3.0.25 | A3：首次激活改为 pinned credential 回退 | 设备仍在同一 mapped credential reference 路径 SIGSEGV，不能使用 |
+| 3.0.26 | A5：weak-only pin，并修复 PTE/full-map 后端分派 | 待构建与设备验证 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -506,9 +508,9 @@ Unable to find item ... (linkage item+0x10) @smr.c:2831
 
 ### 3.0.24 设备失败
 
-3.0.24 覆盖安装后，月余执行到 `Elevating Privileges` 附近时 Dopamine App 直接退出，手机没有重启或注销；重新打开重试仍复现。最高置信根因是首次激活把 GUI App 的 credential 整体替换为 `kernproc` credential。虽然该对象本身不可变，但它同时带入 kernel audit session 与 MAC identity，RunningBoard/launchd 可据此终止 GUI App。
+3.0.24 覆盖安装后，月余执行到 `Elevating Privileges` 附近时 Dopamine App 直接退出，手机没有重启或注销；重新打开重试仍复现。最初曾怀疑完整替换为 `kernproc` credential 导致 RunningBoard 终止 GUI App，但随后取得的两份 crash report 已否定该判断：实际是 `proc_copy_ucred()` 首次执行 `kauth_cred_ref()` 时，`kaccess_mapped()` 解引用未建立的 full-map 地址并触发 SIGSEGV。详见第 16 节。
 
-同一错误模式还存在于 3.0.24 的 `finalize`，且 `rebootUserspace` 可能经 `runUnsandboxed` 再次短暂借用 kernel credential。构建成功不能覆盖该设备回归结论。
+构建成功不能覆盖该设备回归结论，3.0.24 不能继续使用。
 
 ## 15. 3.0.25：首次激活 pinned credential 回退
 
@@ -552,4 +554,82 @@ basebin.tar SHA-256: 81d69748475f90c8b9be03c1aaee8608d4c8369f0bf2fc3f88cc3175d45
 - `UCRED-SMR-18A3` 存在于 `libjailbreak.dylib` 双切片；`RESPRING-IOS18-BBD1` 存在于 `systemhook.dylib` 双切片。
 - artifact ZIP、TIPA 和内层 `basebin.tar` 均可完整枚举和解包。
 
-3.0.25 已通过源码与产物核验，仍需用户设备首次激活验证。在设备验证成功前不能宣布回归已修复。
+3.0.25 已通过源码与产物核验，但设备首次激活仍与 3.0.24 一样在流程中直接退出。A3 不能交付。
+
+## 16. 3.0.26：修复 credential 原子访问的 physrw 后端分派
+
+### 3.0.24/3.0.25 crash report 证据
+
+通过 `mobile` 身份从真实 CrashReporter 路径读取到：
+
+```text
+Dopamine-2026-08-21-214255.ips  3.0.24
+Dopamine-2026-08-21-214315.ips  3.0.24
+Dopamine-2026-08-21-221935.ips  3.0.25
+Dopamine-2026-08-21-222010.ips  3.0.25
+Dopamine-2026-08-21-222301.ips  3.0.25
+```
+
+五份日志均为 `EXC_BAD_ACCESS / SIGSEGV`，共同栈为：
+
+```text
+__kauth_cred_adjust32_block_invoke
+kaccess_mapped
+kauth_cred_reference_adjust
+-[DOJailbreaker elevatePrivileges]
+```
+
+3.0.24 的栈还经过 `proc_copy_ucred`；3.0.25 直接在首次 weak pin 中进入同一 helper。崩溃地址均为 `0x78...` 的用户地址，属于 Dopamine 预留的 PPLRW 物理映射区，而不是 `ucred` 内核地址。因此此前“可能是 `cr_ref` 的只读 zone 写入导致退出”的判断已被新日志否定：实际连第一次 32 位 weak-ref 原子读取都没有完成。
+
+### A5 根因与修复
+
+iPhone XS Max 的激活路径使用 `physrw_pte` 单页 window。`libjailbreak_physrw_pte_init()` 正确注册了：
+
+```text
+gPrimitives.physaccess_mapped = physrw_pte_physaccess_mapped
+```
+
+但旧 `kaccess_mapped()` 没有通过该后端分派，而是固定调用 `physrw_kvtouaddr()`，按整段物理映射计算 `PPLRW_USER_MAPPING_OFFSET`。PTE 模式并没有建立这段整映射，所以 block 首次解引用即 SIGSEGV。
+
+A5 做两项配套修改：
+
+1. 在 primitives 层补齐 `physaccess_mapped()` 分派器，统一调用当前注册的后端。
+2. `kaccess_mapped()` 只负责把 kernel VA 转换成 PA，再经分派器进入 full-map 或 PTE window。PTE window 自带互斥锁，CAS 仍在映射有效期间完成。
+
+A4 的 weak-only 首次 pin 保留：阻止 weak ref 归零已经足以避免 `kauth_cred_retire()` 和错误的 SMR hash remove；无需额外改写 `ZC_READONLY` 中的 long-term `cr_ref`。App 退出时人为保留的 weak ref 使突变 credential 在本次开机周期内不退休。这是首次激活限定、每个进程至多一次的有界保留，不得推广到循环或 daemon 路径。
+
+为避免再次仅凭现象推断，3.0.26 会在提权前打开 App 数据容器内的 `Library/Caches/privilege-elevation-stage.log`，随后通过同一个文件描述符同步覆盖以下阶段：
+
+```text
+begin
+before-weak-pin
+after-weak-pin
+before-posix-writes
+after-posix-writes
+before-mac-label
+after-mac-label
+complete
+```
+
+若 App 再次退出，回退到可用版本后读取该文件即可确定最后完成的步骤。该标记不包含用户数据，也不依赖提权后的 `cfprefsd` 或其他系统服务。
+
+产物标记：
+
+```text
+UCRED-SMR-18A5
+```
+
+3.0.26 仍需完整构建和设备验证，不能从静态分析宣布修复完成。
+
+### 22:36 最新 panic
+
+`panic-full-2026-08-21-223652.0002.ips` 仍是：
+
+```text
+Unable to find item ... (linkage item+0x10) @smr.c:2831
+Panicked task: pid 1130: sudo
+Compressor 16% (OK)
+memoryPressure=false
+```
+
+设备当时运行 3.0.23；panic 紧随一次 SSH `sudo` 日志枚举发生。这再次排除内存耗尽，并确认 3.0.23 的 credential hash 损坏仍可由 `sudo` 路径触发。后续取证必须以 `mobile` 读取 `/rootfs/private/var/mobile/Library/Logs/CrashReporter`，不得为了读取日志调用 `sudo`，也不得对 RootHide 虚拟 `/var/mobile/Library/Logs` 做递归枚举。
