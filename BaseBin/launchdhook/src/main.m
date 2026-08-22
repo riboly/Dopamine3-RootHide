@@ -6,6 +6,7 @@
 #import <libjailbreak/trustcache.h>
 #import <mach-o/dyld.h>
 #import <os/alloc_once_private.h>
+#import <os/log.h>
 #import <dlfcn.h>
 #import <spawn.h>
 #import <pthread.h>
