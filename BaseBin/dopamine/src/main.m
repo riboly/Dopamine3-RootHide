@@ -216,19 +216,6 @@ void load_basebin_trustcache(void)
 	printf("OK\n"); fflush(stdout); usleep(1000);
 }
 
-void restore_persistent_trustcache(void)
-{
-	printf("Restoring Persistent Trustcache... "); fflush(stdout); usleep(1000);
-	int result = jb_trustcache_restore_persistent();
-	if (result != 0) {
-		printf("\nRestoring persistent trustcache failed: %d (%s)\n", result, strerror(result));
-		fflush(stdout);
-		usleep(1000);
-		exit(-1);
-	}
-	printf("OK\n"); fflush(stdout); usleep(1000);
-}
-
 void inject_launchd_hook(void)
 {
 	printf("Injecting launchd hook... "); fflush(stdout); usleep(1000);
@@ -373,7 +360,9 @@ void activate_environment(bool applyProtection, bool prepareBootstrap)
 	}
 
 	load_basebin_trustcache();
-	restore_persistent_trustcache();
+	// Persistent third-party trust is restored by launchdhook after it has
+	// recovered primitives. Keeping this out of the short-lived Dopamine
+	// process prevents IOSurface-backed global allocations from dying with it.
 
 	inject_launchd_hook();
 	

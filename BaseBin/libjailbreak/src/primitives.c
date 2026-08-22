@@ -383,6 +383,17 @@ int kmap(uint64_t pa, uint64_t size, void **uaddr)
 
 int kalloc_with_options(uint64_t *addr, uint64_t size, kalloc_options options)
 {
+	if (options == KALLOC_OPTION_GLOBAL && gPrimitives.kcall && ksymbol(kalloc_data_external)) {
+		uint64_t allocation = 0;
+		// kalloc_data_external() takes zalloc_flags_t.  Z_NOWAIT (1) makes
+		// launchd trust-cache growth fail spuriously under normal boot pressure;
+		// this is a bounded, synchronous kernel allocation and may wait.
+		if (kcall(&allocation, ksymbol(kalloc_data_external), 2, (uint64_t[]){ size, 0 }) == 0 && allocation != 0) {
+			if (addr) *addr = allocation;
+			return 0;
+		}
+		return ENOMEM;
+	}
 	if (options == KALLOC_OPTION_GLOBAL && gPrimitives.kalloc_global) {
 		return gPrimitives.kalloc_global(addr, size);
 	}

@@ -108,10 +108,16 @@ struct jbserver_impl gBoomerangServer = {
 
 int jbserver_received_boomerang_xpc_message(struct jbserver_impl *server, xpc_object_t xmsg)
 {
+	return jbserver_received_boomerang_xpc_message_with_result(server, xmsg, NULL);
+}
+
+int jbserver_received_boomerang_xpc_message_with_result(struct jbserver_impl *server, xpc_object_t xmsg, int *resultOut)
+{
 	int r = jbserver_received_xpc_message(server, xmsg);
 	if (r != 0) {
 		uint64_t action = xpc_dictionary_get_uint64(xmsg, "action");
 		if (action == JBS_BOOMERANG_DONE) {
+			if (resultOut) *resultOut = (int)xpc_dictionary_get_int64(xmsg, "completion-result");
 			xpc_object_t xreply = xpc_dictionary_create_reply(xmsg);
 			xpc_dictionary_set_uint64(xreply, "result", 0);
 			xpc_pipe_routine_reply(xreply);

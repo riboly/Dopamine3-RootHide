@@ -12,8 +12,9 @@
 | 3.0.24 | A2：禁止 iOS 17+ 原地修改 credential hash key，统一安全复制/替换 | 设备首次激活在 `kauth_cred_reference_adjust()` 中 SIGSEGV，不能使用 |
 | 3.0.25 | A3：首次激活改为 pinned credential 回退 | 设备仍在同一 mapped credential reference 路径 SIGSEGV，不能使用 |
 | 3.0.26 | A5：weak-only pin，并修复 PTE/full-map 后端分派 | 设备可正常月余，自动重启显著减少；运行约 3 小时 13 分后出现新的 launchd trust-cache/IOSurface 路径 SIGEMT，不能关闭稳定性问题 |
-| 3.0.27 | B1：修复 launchd trust-cache 并发、去重、跨页写入及 IOSurface 所有权泄漏 | 待构建与设备验证 |
-| 3.0.28 | C1：通用动态 trust-cache 注册表与激活期恢复 | 待构建与设备重启周期验证 |
+| 3.0.27 | B1：修复 launchd trust-cache 并发、去重和跨页写入 | 真机仍发生 IOSurface 生命周期 panic，不能使用 |
+| 3.0.28 | C1：通用动态 trust-cache 注册表 | 真机注册表有效，但主按钮路径未恢复；月余时可自动重启或长时间黑屏卡顿，不能使用 |
+| 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | 代码修复中，待构建和完整重启周期验证 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -813,3 +814,51 @@ TIPA SHA-256: 24fec01c397673b0f05911f8a4c0e1663a57138d78b20b35df832cfde4fcd709
 ```
 
 独立核验结果：外层 artifact ZIP 与 GitHub digest 完全一致；TIPA 含 131 项、内嵌 `basebin.tar` 含 31 项，均无不安全路径；App 标识为 `com.opa334.Dopamine-roothide`，版本为 3.0.28；内嵌 `.version` 为 3.0.28，`.build` 与 source commit 一致；部署用 `libjailbreak.dylib`、`jbctl`、`systemhook.dylib` 均含 arm64 与 arm64e；`UCRED-SMR-18A5`、`TRUSTCACHE-IOSURFACE-18B1`、`TRUSTCACHE-PERSIST-18C1`、`RESPRING-IOS18-BBD1` 均存在于对应最终 Mach-O。当前状态为静态与构建验证通过，设备安装、注册表生成和完整重启恢复仍未验证。
+
+## 19. 3.0.29：trust-cache 分配生命周期与主路径恢复
+
+### 3.0.28 真机结果
+
+3.0.28 已被真机证伪。月余可能在中途触发完整重启；偶尔代码执行完成后黑屏两三分钟才进入桌面，随后系统明显卡顿。完整重启并重新月余后，先前由 TrollFools 等工具注入的普通 App 仍可能因目标 CDHash 不在动态 trust cache 中而无法启动。
+
+`panic-base-2026-08-22-142549.ips` 的关键证据为：
+
+```text
+pmap_tt_deallocate(): ... count 4918 @pmap.c:5673
+Kernel Extensions in backtrace: com.apple.iokit.IOSurface
+Compressor 19% (OK)
+```
+
+这属于 IOSurface memory descriptor 析构期间的页表计数损坏，不是 OOM。B1 在 ranges 与 range count 脱离后立即 `mach_port_deallocate()`；iOS 18 的 IOSurface 析构仍会处理内部 descriptor，因此已链接到 trust-cache 链表的 backing allocation 会与 descriptor 销毁发生冲突。
+
+设备上的 3.0.28 注册表本身有效：magic 为 `RHTCREG1`、版本 1、entry size 22、entry count 185、权限 `mobile:mobile 0600`。但用户点击月余按钮走 `Application/Dopamine/Jailbreak/DOJailbreaker.m`，3.0.28 的恢复调用只存在于独立 `BaseBin/dopamine/src/main.m`，所以实际主路径加载 basebin trust cache 后直接注入 launchdhook，没有读取这份注册表。
+
+Telegram 当前 `MtProtoKitFramework` 的 CDHash `a202c0c39cdf9c01e755ab4a22588b4d57886531` 既不在该注册表，也不在 live cache；它不是恢复阶段丢失，而是此前从未成功持久登记。`CydiaSubstrate` 的 arm64e CDHash `c63fd92bb489dd50f404fad75d221c561d433a45` 已在注册表。恢复器只能恢复已经授予并落盘的 CDHash，不能从不存在的历史内核状态推导文件清单。
+
+### B2/D1 设计
+
+- 当 kcall 与 `kalloc_data_external` 可用时，所有 global `kalloc()` 直接使用真正的内核 allocator，并传入 `Z_WAITOK`（数值 0）；不得传入 `1`，因为在 XNU 11215 中它是 `Z_NOWAIT`，会令启动压力下的有界恢复随机返回空指针。固定 basebin/dyld trust cache、动态页和持久恢复均不再依赖进程持有的 IOSurface/Mach right。没有 kcall 的旧设备继续使用 IOSurface 兼容回退，但成功摘出的 global allocation 不再立即触发 descriptor 析构。
+- 原地升级时，现存 trust-cache 页可能由 3.0.28 的 IOSurface 回退创建，而新页来自 `kalloc_data_external`。页内没有 allocator provenance，因此替换固定 UUID trust cache 时只从链表摘除旧页，本次 boot 内不调用任何释放器；把 IOSurface 页交给 `kfree_data_external` 或反向混用都可能破坏内核。该有界泄漏在下次完整重启时自然消失。
+- 持久恢复从短生命周期 Dopamine 进程移到 launchdhook。launchd 先通过 boomerang 恢复 primitives，再读取注册表并恢复第三方条目。
+- boomerang 完成消息新增 `completion-result`。launchd 只有在恢复完成后才通知按钮端；恢复 errno 会返回 `injectLaunchdHook`，UI 不再把未恢复的环境当成成功。恢复失败只记录并返回，不主动 abort PID 1。
+- 注册表 merge 先规范化本次请求，再与已有有序条目线性合并；同 hash 的新显式授权覆盖旧元数据，同一批次里 hash 相同但 `hash_type/flags` 冲突则返回 `EINVAL`。只有条目数和完整 entry 内容都一致时才跳过原子重写与 full sync。
+- 恢复仍位于通用 `jb_trustcache_add_entries()` 所有权边界，不扫描 Telegram 或其他普通 App 容器，不依赖 `_TrollStoreLite`，也不保存 TrollFools 专属路径。
+
+3.0.28 产物的 LC_UUID 复核结果：`43bc3f75-8bb4-318d-846e-b86b7aee7f88` 是 `libjailbreak.dylib`，`228aaa11-6098-3a19-8326-5b5abb44f526` 是 `launchdhook.dylib`；SIGTRAP 触发线程使用的 `39968232-6191-3a4c-a577-845246f43357` 不存在于 App 或 `basebin.tar` 的任何 Mach-O 中，属于系统共享缓存镜像，不能再把 image 15 误标成 launchdhook。独立的 `pmap_tt_deallocate` panic 与 IOSurface 内核 backtrace 仍是 B2 的直接证据。
+
+产物标记：
+
+```text
+TRUSTCACHE-KALLOC-18B2
+TRUSTCACHE-PERSIST-18C1
+TRUSTCACHE-PERSIST-18D1
+```
+
+### 3.0.29 验证要求
+
+1. 构建产物必须包含 3.0.29、arm64/arm64e 切片及 `UCRED-SMR-18A5`、`TRUSTCACHE-KALLOC-18B2`、`TRUSTCACHE-PERSIST-18C1`、`TRUSTCACHE-PERSIST-18D1`、`RESPRING-IOS18-BBD1`。
+2. 覆盖安装前记录注册表和 live cache。安装后先让 Telegram 对应工具及至少一个其他 RootHide 动态信任调用方成功登记一次；必须先证明目标 CDHash 已进入注册表。
+3. 对安装前已经丢失且注册表中从未存在的 CDHash，先由原工具重新信任或重新注入一次。不得把这种历史缺项当成恢复器能够凭空重建的文件条目。
+4. 经用户单独授权后执行完整重启并重新月余。在启动 TrollFools、目标 App 或其他登记工具之前，检查目标 CDHash 已经恢复到 live dynamic trust cache，并核对 `TRUSTCACHE-PERSIST-18D1` 成功日志。
+5. 直接启动先前注入的 App，确认 Loader、插件和依赖均可映射；继续观察是否出现 IOSurface `pmap_tt_deallocate`、月余中途自动重启、异常长黑屏或系统卡顿。
+6. 构建成功只能标记为静态验证；只有上述完整重启周期和持续稳定性观察均通过，才能标记为设备修复完成。

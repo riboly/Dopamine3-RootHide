@@ -3,6 +3,7 @@
 #import <libjailbreak/util.h>
 #import <libjailbreak/kernel.h>
 #import <libjailbreak/display.h>
+#import <libjailbreak/trustcache.h>
 #import <mach-o/dyld.h>
 #import <os/alloc_once_private.h>
 #import <dlfcn.h>
@@ -10,6 +11,7 @@
 #import <pthread.h>
 #import <sys/stat.h>
 #import <sys/sysctl.h>
+#import <string.h>
 #import <unistd.h>
 #import <substrate.h>
 
@@ -169,12 +171,33 @@ __attribute__((constructor)) static void initializer(void)
 		firstLoad = true;
 	}
 
-	int err = boomerang_recoverPrimitives(firstLoad, true);
+	int err = boomerang_recoverPrimitives(firstLoad);
 	if (err != 0) {
-		char msg[1000];
-		snprintf(msg, 1000, "Dopamine: Failed to recover primitives (error %d), cannot continue.", err);
-		abort_with_reason(7, 1, msg, 0);
+		os_log_error(OS_LOG_DEFAULT,
+			"[TRUSTCACHE-PERSIST-18D1] failed to recover primitives: %{public}d",
+			err);
+		(void)boomerang_complete(err);
 		return;
+	}
+
+	// Restore third-party dynamic trust only after launchd owns the recovered
+	// primitives. Allocating these pages in the temporary Dopamine process
+	// leaves IOSurface-backed storage tied to a process that exits immediately
+	// after injection, which can corrupt pmap accounting on iOS 18.
+	int trustcacheRestoreResult = jb_trustcache_restore_persistent();
+	if (trustcacheRestoreResult != 0) {
+		os_log_error(OS_LOG_DEFAULT,
+			"[TRUSTCACHE-PERSIST-18D1] launchd restore failed: %{public}d (%{public}s)",
+			trustcacheRestoreResult, strerror(trustcacheRestoreResult));
+	}
+	else {
+		os_log(OS_LOG_DEFAULT, "[TRUSTCACHE-PERSIST-18D1] launchd restore completed");
+	}
+	int handoffResult = boomerang_complete(trustcacheRestoreResult);
+	if (handoffResult != 0) {
+		os_log_error(OS_LOG_DEFAULT,
+			"[TRUSTCACHE-PERSIST-18D1] failed to report launchd restore result: %{public}d",
+			handoffResult);
 	}
 
 	if (jbupdatePrevVersion && jbupdateNewVersion) {

@@ -12,7 +12,7 @@
 #include "primitives.h"
 #include "trustcache_persistence.h"
 
-static const char kTrustCacheStabilityMarker[] __attribute__((used)) = "TRUSTCACHE-IOSURFACE-18B1";
+static const char kTrustCacheStabilityMarker[] __attribute__((used)) = "TRUSTCACHE-KALLOC-18B2";
 static const char kTrustCachePersistenceMarker[] __attribute__((used)) = "TRUSTCACHE-PERSIST-18C1";
 static os_unfair_lock gJbTrustCacheLock = OS_UNFAIR_LOCK_INIT;
 static pthread_mutex_t gJbTrustCacheOperationLock = PTHREAD_MUTEX_INITIALIZER;
@@ -620,7 +620,11 @@ static int trustcache_file_upload_unlocked(trustcache_file_v1 *tc)
 				return -1; // really unlikely error, if this triggers the world is probably upside down
 			}
 			usleep(10000); // hope for current accesses to finish if there are any (new accesses won't come as we removed the list entry)
-			kfree(existingTcKaddr, prevTcSize); // free the original allocation
+			// Do not free a detached page here.  Trust caches created by an older
+			// activation may be IOSurface-backed, while current pages use
+			// kalloc_data_external(); without allocator provenance, either free
+			// primitive could corrupt the kernel.  Detached trust-cache pages are
+			// intentionally retained until the next boot.
 			// now just fall through and make this function add the new TrustCache
 		}
 	}

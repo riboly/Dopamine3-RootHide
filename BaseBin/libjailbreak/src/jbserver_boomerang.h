@@ -17,5 +17,6 @@ int boomerang_get_sysinfo(xpc_object_t *sysInfoOut);
 
 extern struct jbserver_impl gBoomerangServer;
 int jbserver_received_boomerang_xpc_message(struct jbserver_impl *server, xpc_object_t xmsg);
+int jbserver_received_boomerang_xpc_message_with_result(struct jbserver_impl *server, xpc_object_t xmsg, int *resultOut);
 
 #endif

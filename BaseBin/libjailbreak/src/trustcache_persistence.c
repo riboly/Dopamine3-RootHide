@@ -378,36 +378,84 @@ int jb_trustcache_persistent_merge(const trustcache_entry_v1 *entries, uint32_t 
 	result = read_registry_unlocked(&existingEntries, &existingEntryCount);
 	if (result != 0) goto out;
 
-	uint64_t combinedEntryCount = (uint64_t)existingEntryCount + entryCount;
+	trustcache_entry_v1 *requestedEntries = malloc((size_t)entryCount * sizeof(*requestedEntries));
+	if (!requestedEntries) {
+		result = ENOMEM;
+		goto out;
+	}
+	memcpy(requestedEntries, entries, (size_t)entryCount * sizeof(*requestedEntries));
+	qsort(requestedEntries, entryCount, sizeof(*requestedEntries), trustcache_entry_comparator);
+
+	uint32_t requestedEntryCount = 0;
+	for (uint32_t i = 0; i < entryCount; i++) {
+		if (requestedEntryCount > 0 &&
+			memcmp(requestedEntries[requestedEntryCount - 1].hash, requestedEntries[i].hash,
+				sizeof(requestedEntries[i].hash)) == 0) {
+			if (memcmp(&requestedEntries[requestedEntryCount - 1], &requestedEntries[i],
+					sizeof(requestedEntries[i])) != 0) {
+				result = EINVAL;
+				free(requestedEntries);
+				goto out;
+			}
+			continue;
+		}
+		requestedEntries[requestedEntryCount++] = requestedEntries[i];
+	}
+
+	uint64_t combinedEntryCount = (uint64_t)existingEntryCount + requestedEntryCount;
 	if (combinedEntryCount > (uint64_t)JB_TRUSTCACHE_PERSISTENT_MAX_ENTRIES * 2U) {
 		result = ENOSPC;
+		free(requestedEntries);
 		goto out;
 	}
 	trustcache_entry_v1 *combinedEntries = calloc((size_t)combinedEntryCount, sizeof(*combinedEntries));
 	if (!combinedEntries) {
 		result = ENOMEM;
+		free(requestedEntries);
 		goto out;
 	}
-	memcpy(combinedEntries, existingEntries, (size_t)existingEntryCount * sizeof(*combinedEntries));
-	memcpy(&combinedEntries[existingEntryCount], entries, (size_t)entryCount * sizeof(*combinedEntries));
-	qsort(combinedEntries, (size_t)combinedEntryCount, sizeof(*combinedEntries), trustcache_entry_comparator);
 
 	uint32_t uniqueEntryCount = 0;
-	for (uint64_t i = 0; i < combinedEntryCount; i++) {
-		if (uniqueEntryCount > 0 &&
-			memcmp(combinedEntries[uniqueEntryCount - 1].hash, combinedEntries[i].hash,
-				sizeof(combinedEntries[i].hash)) == 0) {
-			continue;
-		}
+	uint32_t existingIndex = 0;
+	uint32_t requestedIndex = 0;
+	while (existingIndex < existingEntryCount || requestedIndex < requestedEntryCount) {
 		if (uniqueEntryCount >= JB_TRUSTCACHE_PERSISTENT_MAX_ENTRIES) {
 			result = ENOSPC;
+			free(requestedEntries);
 			free(combinedEntries);
 			goto out;
 		}
-		combinedEntries[uniqueEntryCount++] = combinedEntries[i];
+		if (existingIndex >= existingEntryCount) {
+			combinedEntries[uniqueEntryCount++] = requestedEntries[requestedIndex++];
+			continue;
+		}
+		if (requestedIndex >= requestedEntryCount) {
+			combinedEntries[uniqueEntryCount++] = existingEntries[existingIndex++];
+			continue;
+		}
+		int hashResult = memcmp(existingEntries[existingIndex].hash, requestedEntries[requestedIndex].hash,
+			sizeof(existingEntries[existingIndex].hash));
+		if (hashResult < 0) {
+			combinedEntries[uniqueEntryCount++] = existingEntries[existingIndex++];
+		}
+		else {
+			combinedEntries[uniqueEntryCount++] = requestedEntries[requestedIndex++];
+			if (hashResult == 0) existingIndex++;
+		}
 	}
+	free(requestedEntries);
 
-	result = write_registry_unlocked(combinedEntries, uniqueEntryCount);
+	// A repeated trust request can contain only CDHashes that are already in
+	// the registry. Avoid rewriting and fully syncing the complete file in
+	// launchd when the durable state is unchanged.
+	if (uniqueEntryCount == existingEntryCount &&
+		(uniqueEntryCount == 0 || memcmp(combinedEntries, existingEntries,
+			(size_t)uniqueEntryCount * sizeof(*combinedEntries)) == 0)) {
+		result = 0;
+	}
+	else {
+		result = write_registry_unlocked(combinedEntries, uniqueEntryCount);
+	}
 	free(combinedEntries);
 
 out:

@@ -321,9 +321,11 @@ static uint64_t IOSurface_kalloc_16up(uint64_t size, bool leak)
 				// rather than destroying a partially modified IOSurface object.
 				return 0;
 			}
-			// The detached ranges are the global allocation. The IOSurface and
-			// send right are no longer needed and must not accumulate in launchd.
-			mach_port_deallocate(mach_task_self(), surfaceMachPort);
+			// The detached ranges back a permanent global allocation. Keep the
+			// Mach right alive for the same lifetime: IOSurface teardown still
+			// releases its memory descriptor on iOS 18 even after ranges/count
+			// are cleared, which corrupts pmap page-table accounting when the
+			// detached allocation remains linked from a trust cache.
 		}
 
 		return va;

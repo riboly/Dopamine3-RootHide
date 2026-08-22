@@ -589,7 +589,15 @@ int jbclient_root_trustcache_clear(void)
 
 int jbclient_boomerang_done(void)
 {
-	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_ROOT, JBS_BOOMERANG_DONE, NULL);
+	return jbclient_boomerang_done_with_result(0);
+}
+
+int jbclient_boomerang_done_with_result(int completionResult)
+{
+	xpc_object_t xargs = xpc_dictionary_create_empty();
+	xpc_dictionary_set_int64(xargs, "completion-result", completionResult);
+	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_ROOT, JBS_BOOMERANG_DONE, xargs);
+	xpc_release(xargs);
 	if (xreply) {
 		int64_t result = xpc_dictionary_get_int64(xreply, "result");
 		xpc_release(xreply);

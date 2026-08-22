@@ -8,6 +8,7 @@
 #include <libjailbreak/kcall_Fugu14.h>
 #include <libjailbreak/kcall_arm64.h>
 #include <libjailbreak/stock_fixes.h>
+#include <errno.h>
 #include <unistd.h>
 
 int posix_spawnattr_set_registered_ports_np(posix_spawnattr_t *__restrict attr, mach_port_t portarray[], uint32_t count);
@@ -16,6 +17,8 @@ int posix_spawnattr_set_registered_ports_np(posix_spawnattr_t *__restrict attr, 
 
 #define JB_PRIMITIVE_STORAGE_RETRIEVE_PHYSRW 1
 #define JB_PRIMITIVE_STORAGE_RETRIEVE_KCALL 2
+
+static pid_t gRecoveredBoomerangPid = 0;
 
 void boomerang_stashPrimitives()
 {
@@ -58,7 +61,7 @@ void boomerang_stashPrimitives()
 	setenv("BOOMERANG_PID", pidBuf, 1);
 }
 
-int boomerang_recoverPrimitives(bool firstRetrieval, bool shouldEndBoomerang)
+int boomerang_recoverPrimitives(bool firstRetrieval)
 {
 	// Mach port to boomerang should be stored in our registeredPorts[2]
 	// Use it to recover primitives, afterwards replace it with MACH_PORT_NULL to make launchd happy
@@ -72,10 +75,9 @@ int boomerang_recoverPrimitives(bool firstRetrieval, bool shouldEndBoomerang)
 	mach_ports_register(mach_task_self(), registeredPorts, registeredPortsCount);
 
 	// Recover boomerang pid from environment
-	pid_t boomerangPid = 0;
 	const char *pidBuf = getenv("BOOMERANG_PID");
 	if (pidBuf) {
-		boomerangPid = atoi(pidBuf);
+		gRecoveredBoomerangPid = atoi(pidBuf);
 		unsetenv("BOOMERANG_PID");
 	}
 
@@ -84,19 +86,20 @@ int boomerang_recoverPrimitives(bool firstRetrieval, bool shouldEndBoomerang)
 	// Handing off full physrw from the app is really slow and causes watchdog timeouts
 	// But from launchd it's generally fine, no clue why
 	bool physrwPTE = firstRetrieval && !is_kcall_available();
-	jbclient_initialize_primitives_internal(physrwPTE);
-
-	if (shouldEndBoomerang) {
-		// Send done message to boomerang
-		jbclient_boomerang_done();
-
-		// Remove boomerang zombie proc if needed
-		if (boomerangPid != 0) {
-			int boomerangStatus;
-			waitpid(boomerangPid, &boomerangStatus, WEXITED);
-			waitpid(boomerangPid, &boomerangStatus, 0);
-		}
-	}
-
+	if (jbclient_initialize_primitives_internal(physrwPTE) != 0) return EIO;
 	return 0;
+}
+
+int boomerang_complete(int completionResult)
+{
+	int result = jbclient_boomerang_done_with_result(completionResult);
+
+	// Remove boomerang zombie proc if needed.
+	if (gRecoveredBoomerangPid != 0) {
+		int boomerangStatus;
+		waitpid(gRecoveredBoomerangPid, &boomerangStatus, WEXITED);
+		waitpid(gRecoveredBoomerangPid, &boomerangStatus, 0);
+		gRecoveredBoomerangPid = 0;
+	}
+	return result;
 }
