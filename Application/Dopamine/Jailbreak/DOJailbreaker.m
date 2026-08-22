@@ -437,17 +437,14 @@ void *boomerang_server(void *context)
     while (true) {
         xpc_object_t xdict = nil;
         if (xpc_pipe_receive(info->serverPort, &xdict)) {
-            if (xdict) xpc_release(xdict);
             break;
         }
         int completionResult = 0;
         if (jbserver_received_boomerang_xpc_message_with_result(&gBoomerangServer, xdict, &completionResult) == JBS_BOOMERANG_DONE) {
             info->completionResult = completionResult;
-            xpc_release(xdict);
             dispatch_semaphore_signal(info->boomerangDone);
             break;
         }
-        xpc_release(xdict);
     }
     return NULL;
 }
