@@ -14,7 +14,7 @@
 | 3.0.26 | A5：weak-only pin，并修复 PTE/full-map 后端分派 | 设备可正常月余，自动重启显著减少；运行约 3 小时 13 分后出现新的 launchd trust-cache/IOSurface 路径 SIGEMT，不能关闭稳定性问题 |
 | 3.0.27 | B1：修复 launchd trust-cache 并发、去重和跨页写入 | 真机仍发生 IOSurface 生命周期 panic，不能使用 |
 | 3.0.28 | C1：通用动态 trust-cache 注册表 | 真机注册表有效，但主按钮路径未恢复；月余时可自动重启或长时间黑屏卡顿，不能使用 |
-| 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | 代码修复中，待构建和完整重启周期验证 |
+| 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | GitHub Actions 全量构建通过；设备安装与完整重启周期仍待验证 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -853,6 +853,21 @@ TRUSTCACHE-KALLOC-18B2
 TRUSTCACHE-PERSIST-18C1
 TRUSTCACHE-PERSIST-18D1
 ```
+
+### 3.0.29 构建记录
+
+```text
+commit: 045faeb62a76fa1a011582d8943730b6e4ba450a
+workflow run: 32560952417
+workflow URL: https://github.com/riboly/Dopamine3-RootHide/actions/runs/32560952417
+artifact id: 9472776011
+artifact: roothide-Dopamine-3.0.29-045faeb.tipa
+artifact ZIP SHA-256: 4d3255ad5ad6b083678ba77fcc3f2bb30f1806dcd8b7d4a2d8788f5b537d4b1b
+TIPA SHA-256: 903bd021789ab9920edc40be92ead8fff020dd2402bf7582e63f22fe3591c64e
+status: STATICALLY VERIFIED; device installation and reboot-cycle validation pending
+```
+
+独立产物核验：TIPA 含 131 项、`basebin.tar` 含 31 项，ZIP CRC 与路径安全检查通过；App/basebin 版本均为 3.0.29，`.build` 与 commit 一致；`libjailbreak.dylib`、`jbctl`、`launchdhook.dylib`、`systemhook.dylib` 均含 arm64 与 arm64e；五个运行时标记全部存在。该结果不等价于真机稳定性验证。
 
 ### 3.0.29 验证要求
 
