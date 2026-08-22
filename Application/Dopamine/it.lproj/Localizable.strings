@@ -95,14 +95,15 @@
 
 // Logs
 "Initializing Environment" = "Inizializzo l'ambiente";
-/*Initializing Protection*/
-/*Loading BaseBin TrustCache*/
-/*Applying Bind Mount*/
-/*Removing Jailbreak*/
-/*Elevating Privileges*/
-/*Cleaning Up Exploits*/
-/*Building Phys R/W Primitive*/
-/*Rebooting Userspace*/
+"Initializing Protection" = "Inizializzo la Proteczione";
+"Loading BaseBin TrustCache" = "Carico BaseBin TrustCache";
+"Applying Bind Mount" = "Applico Bind Mount";
+/*Rebuilding Icon Cache*/
+"Removing Jailbreak" = "Rimuovo il Jailbreak";
+"Elevating Privileges" = "Elevo i Privilegi";
+"Cleaning Up Exploits" = "Pulisco gli Exploit";
+"Building Phys R/W Primitive" = "Costruisco Phys R/W Primitive";
+"Rebooting Userspace" = "Riavvio in Userspace";
 "Patchfinding" = "Trovo patch";
 /*Exploiting Kernel (%@)*/
 /*Bypassing PAC (%@)*/

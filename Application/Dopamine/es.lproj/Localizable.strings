@@ -95,12 +95,13 @@
 "Credits_Button_License" = "Licencias";
 "Credits_Button_Source_Code" = "Código fuente";
 
-// Logs
-"Initializing Environment" = "Inicializando entorno de Jailbreak";
-"Initializing Protection" = "Inicializar la protección";
-"Loading BaseBin TrustCache" = "Cargando BaseBin TrustCache";
-"Applying Bind Mount" = "Aplicando montaje por vínculo";
-"Removing Jailbreak" = "Eliminando Jailbreak";
+// Registros
+"Initializing Environment" = "Inicializando entorno de jailbreak";
+"Initializing Protection" = "Inicializando protección";
+"Loading BaseBin TrustCache" = "Cargando TrustCache de BaseBin";
+"Applying Bind Mount" = "Aplicando bind mount";
+/*Rebuilding Icon Cache*/
+"Removing Jailbreak" = "Eliminando jailbreak";
 "Elevating Privileges" = "Elevando privilegios";
 "Cleaning Up Exploits" = "Limpiando Exploits";
 "Building Phys R/W Primitive" = "Construcción física R/W primitiva";
