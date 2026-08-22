@@ -6,14 +6,9 @@
 
 #import <Foundation/Foundation.h>
 #import <CoreServices/LSApplicationProxy.h>
+#import <CoreServices/LSApplicationWorkspace.h>
 #include <signal.h>
 #include <string.h>
-
-@interface LSApplicationWorkspace : NSObject
-+ (instancetype)defaultWorkspace;
-- (NSArray<LSApplicationProxy *> *)allApplications;
-- (BOOL)uninstallApplication:(NSString *)bundleIdentifier withOptions:(NSDictionary *)options error:(NSError **)error usingBlock:(id)block;
-@end
 
 int reboot3(uint64_t flags, ...);
 #define RB2_USERREBOOT (0x2000000000000000llu)
@@ -271,6 +266,10 @@ int main(int argc, char* argv[])
 			killall("/usr/libexec/backboardd", SIGTERM);
 		}
 		return 0;
+	}
+	else if (!strcmp(cmd, "rebuild_icon_cache")) {
+		BOOL suc = [[LSApplicationWorkspace defaultWorkspace] _LSPrivateRebuildApplicationDatabasesForSystemApps:YES internal:YES user:YES];
+		return suc ? 0 : -1;
 	}
 	else if (!strcmp(cmd, "update")) {
 		if (argc < 4) {

@@ -533,6 +533,11 @@ extern char **environ;
     [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];
 }
 
+- (void)rebuildIconCache
+{
+    [self spawnJbctlAsRootWithArgs:@[@"rebuild_icon_cache"]];
+}
+
 - (void)refreshJailbreakApps
 {
     [self runAsRoot:^{

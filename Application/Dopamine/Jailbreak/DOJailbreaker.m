@@ -662,6 +662,23 @@ static void cancel_boomerang_server(struct boomerang_info *info, pthread_t threa
     return nil;
 }
 
+- (NSError *)removeJailbreak
+{
+    if (@available(iOS 18.4, *)) {
+        // On iOS 18.4+, jailbreak apps persist on the home screen even when unjailbroken
+        // So we need to remove them from icon cache before deleting the bootstrap
+        [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Rebuilding Icon Cache") debug:NO];
+        [[DOEnvironmentManager sharedManager] rebuildIconCache];
+    }
+
+    NSError *err;
+    [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Removing Jailbreak") debug:NO];
+    err = [[DOEnvironmentManager sharedManager] deleteBootstrap];
+    if (err) return err;
+
+    return nil;
+}
+
 - (NSError *)finalizeBootstrapIfNeeded
 {
     return [[DOEnvironmentManager sharedManager] finalizeBootstrap];
@@ -732,6 +749,7 @@ static void cancel_boomerang_server(struct boomerang_info *info, pthread_t threa
 
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Elevating Privileges") debug:NO];
     *errOut = [self elevatePrivileges];
+
     if (*errOut) return;
     *errOut = [self showNonDefaultSystemApps];
     if (*errOut) {
@@ -747,14 +765,6 @@ static void cancel_boomerang_server(struct boomerang_info *info, pthread_t threa
     // Now that we are unsandboxed, populate the jailbreak root path
     *errOut = [[DOEnvironmentManager sharedManager] ensureJailbreakRootExists];
     if (*errOut) {
-        [self cleanUpPostExploitation];
-        return;
-    }
-    
-    if (removeJailbreakEnabled) {
-        [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Removing Jailbreak") debug:NO];
-        *errOut = [[DOEnvironmentManager sharedManager] deleteBootstrap];
-        *didRemove = YES;
         [self cleanUpPostExploitation];
         return;
     }
@@ -781,7 +791,13 @@ static void cancel_boomerang_server(struct boomerang_info *info, pthread_t threa
         [self cleanUpPostExploitation];
         return;
     }
-    
+    if (removeJailbreakEnabled) {
+        *errOut = [self removeJailbreak];
+        [self cleanUpPostExploitation];
+        if (!*errOut) *didRemove = YES;
+        return;
+    }
+
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Initializing Environment") debug:NO];
     *errOut = [self injectLaunchdHook];
     if (*errOut) {
