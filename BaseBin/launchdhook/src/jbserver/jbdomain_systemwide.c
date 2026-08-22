@@ -154,8 +154,12 @@ int systemwide_trust_file(audit_token_t *processToken, int rfd, struct siginfo *
 	uint32_t cdhashesCount = 0;
 	file_collect_untrusted_cdhashes(fd, &cdhashes, &cdhashesCount);
 	if (cdhashes && cdhashesCount > 0) {
-		jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
+		int trustCacheResult = jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
 		free(cdhashes);
+		if (trustCacheResult != 0) {
+			close(fd);
+			return trustCacheResult;
+		}
 	}
 
 	struct siginfo *sigInfos = NULL;

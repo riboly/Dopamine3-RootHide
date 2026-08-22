@@ -3,9 +3,15 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
+#include <os/lock.h>
 #include "kernel.h"
 #include "info.h"
 #include "primitives.h"
+
+static const char kTrustCacheStabilityMarker[] __attribute__((used)) = "TRUSTCACHE-IOSURFACE-18B1";
+static os_unfair_lock gJbTrustCacheLock = OS_UNFAIR_LOCK_INIT;
+static bool is_cdhash_trustcached_unlocked(cdhash_t CDHash);
 
 void _trustcache_file_init(trustcache_file_v1 *file)
 {
@@ -34,17 +40,22 @@ uint64_t _trustcache_list_get_start(void)
 	return 0;
 }
 
-void _trustcache_list_set_start(uint64_t newStart)
+int _trustcache_list_set_start(uint64_t newStart)
 {
 	if (ksymbol(pmap_image4_trust_caches)) { // iOS <=15
-		kwrite64(ksymbol(pmap_image4_trust_caches), newStart);
+		return kwrite64(ksymbol(pmap_image4_trust_caches), newStart);
 	}
 	else if (ksymbol(ppl_trust_cache_rt)) {  // iOS >=16
-		kwrite64(kread64(ksymbol(ppl_trust_cache_rt) + 0x20), newStart);
+		uint64_t listHead = kread64(ksymbol(ppl_trust_cache_rt) + 0x20);
+		if (!listHead) return -1;
+		return kwrite64(listHead, newStart);
 	}
 	else if (ksymbol_txm(txm_trustcache_root)) { // iOS >=17, SPTM/TXM
-		kwrite64(kread64(ksymbol_txm(txm_trustcache_root) + 0x20), newStart);
+		uint64_t listHead = kread64(ksymbol_txm(txm_trustcache_root) + 0x20);
+		if (!listHead) return -1;
+		return kwrite64(listHead, newStart);
 	}
+	return -1;
 }
 
 void _trustcache_list_enumerate(void (^enumerateBlock)(uint64_t tcKaddr, bool *stop))
@@ -71,19 +82,25 @@ int trustcache_list_insert(uint64_t tcToInsert)
 		_trustcache_list_enumerate(^(uint64_t tcKaddr, bool *stop) {
 			lastTC = tcKaddr;
 		});
+		if (!lastTC) return -1;
 
 		if (koffsetof(trustcache, prevptr)) {
-			kwrite64(tcToInsert + koffsetof(trustcache, prevptr), lastTC);
+			if (kwrite64(tcToInsert + koffsetof(trustcache, prevptr), lastTC) != 0) return -1;
 		}
-		kwrite64(lastTC + koffsetof(trustcache, nextptr), tcToInsert);
+		if (kwrite64(lastTC + koffsetof(trustcache, nextptr), tcToInsert) != 0) return -1;
 	}
 	else {
 		uint64_t previousStartTC = _trustcache_list_get_start();
-		kwrite64(tcToInsert + koffsetof(trustcache, nextptr), previousStartTC);
-		if (koffsetof(trustcache, prevptr)) {
-			kwrite64(previousStartTC + koffsetof(trustcache, prevptr), tcToInsert);
+		if (kwrite64(tcToInsert + koffsetof(trustcache, nextptr), previousStartTC) != 0) return -1;
+		if (previousStartTC && koffsetof(trustcache, prevptr)) {
+			if (kwrite64(previousStartTC + koffsetof(trustcache, prevptr), tcToInsert) != 0) return -1;
 		}
-		_trustcache_list_set_start(tcToInsert);
+		if (_trustcache_list_set_start(tcToInsert) != 0) {
+			if (previousStartTC && koffsetof(trustcache, prevptr)) {
+				(void)kwrite64(previousStartTC + koffsetof(trustcache, prevptr), 0);
+			}
+			return -1;
+		}
 	}
 
 	return 0;
@@ -100,9 +117,9 @@ int trustcache_list_remove(uint64_t tcKaddr)
 		return -1;
 	}
 	else if (curTc == tcKaddr) {
-		_trustcache_list_set_start(nextTc);
+		if (_trustcache_list_set_start(nextTc) != 0) return -1;
 		if (nextTc && koffsetof(trustcache, prevptr)) {
-			kwrite64(nextTc + koffsetof(trustcache, prevptr), 0);
+			if (kwrite64(nextTc + koffsetof(trustcache, prevptr), 0) != 0) return -1;
 		}
 	}
 	else {
@@ -115,9 +132,9 @@ int trustcache_list_remove(uint64_t tcKaddr)
 			prevTc = curTc;
 			curTc = kread64(curTc);
 		}
-		kwrite64(prevTc + koffsetof(trustcache, nextptr), nextTc);
+		if (kwrite64(prevTc + koffsetof(trustcache, nextptr), nextTc) != 0) return -1;
 		if (nextTc && koffsetof(trustcache, prevptr)) {
-			kwrite64(nextTc + koffsetof(trustcache, prevptr), prevTc);
+			if (kwrite64(nextTc + koffsetof(trustcache, prevptr), prevTc) != 0) return -1;
 		}
 	}
 
@@ -158,22 +175,35 @@ void _jb_trustcache_enumerate(void (^enumerateBlock)(uint64_t jbTcKaddr, bool *s
 	});
 }
 
-void jb_trustcache_clear(void)
+int jb_trustcache_clear(void)
 {
+	__block int result = 0;
+	os_unfair_lock_lock(&gJbTrustCacheLock);
 	_jb_trustcache_enumerate(^(uint64_t jbTcKaddr, bool *stop) {
-		kwrite64(jbTcKaddr + offsetof(jb_trustcache, file.length), 0);
+		if (kwrite64(jbTcKaddr + offsetof(jb_trustcache, file.length), 0) != 0) {
+			result = EIO;
+			*stop = true;
+		}
 	});
+	os_unfair_lock_unlock(&gJbTrustCacheLock);
+	return result;
 }
 
-uint64_t _jb_trustcache_grow(void)
+static int _jb_trustcache_grow(uint64_t *jbTcKernOut)
 {
-	uint64_t jbTcKern = 0;
-	if (kalloc(&jbTcKern, 0x4000) != 0) return 0;
-
-	jb_trustcache *jbTc = alloca(sizeof(jb_trustcache));
-	memset(jbTc, 0, sizeof(jb_trustcache));
+	if (!jbTcKernOut) return EINVAL;
+	*jbTcKernOut = 0;
+	jb_trustcache *jbTc = calloc(1, sizeof(*jbTc));
+	if (!jbTc) return ENOMEM;
 	_trustcache_file_init(&jbTc->file);
 	jbTc->magic = JB_MAGIC;
+
+	uint64_t jbTcKern = 0;
+	if (kalloc(&jbTcKern, 0x4000) != 0) {
+		free(jbTc);
+		return ENOMEM;
+	}
+
 	*(uint64_t *)(jbTc->trustcache + koffsetof(trustcache, fileptr)) = (jbTcKern + offsetof(jb_trustcache, file));
 	if (koffsetof(trustcache, size)) {
 		*(uint64_t *)(jbTc->trustcache + koffsetof(trustcache, size)) = JB_TRUSTCACHE_SIZE;
@@ -181,27 +211,70 @@ uint64_t _jb_trustcache_grow(void)
 	if (koffsetof(trustcache, type)) {
 		*(uint64_t *)(jbTc->trustcache + koffsetof(trustcache, type)) = 0x5;
 	}
-	kwritebuf(jbTcKern, jbTc, sizeof(*jbTc));
-	trustcache_list_insert(jbTcKern);
-	return jbTcKern;
+	if (kwritebuf(jbTcKern, jbTc, sizeof(*jbTc)) != 0) {
+		free(jbTc);
+		return EIO;
+	}
+	free(jbTc);
+	if (trustcache_list_insert(jbTcKern) != 0) return EIO;
+	*jbTcKernOut = jbTcKern;
+	return 0;
 }
 
 int jb_trustcache_add_entries(struct trustcache_entry_v1 *entries, uint32_t entryCount)
 {
-	uint32_t remainingEntryCount = entryCount;
+	if (entryCount == 0) return 0;
+	if (!entries) return EINVAL;
+
+	trustcache_entry_v1 *pendingEntries = calloc(entryCount, sizeof(*pendingEntries));
+	if (!pendingEntries) return ENOMEM;
+
+	int result = 0;
+	uint32_t pendingEntryCount = 0;
+	os_unfair_lock_lock(&gJbTrustCacheLock);
+
+	// Collection happens before this lock is acquired. Recheck the live cache
+	// and remove duplicates from the request so repeated trust calls cannot
+	// consume a new 16 KiB global allocation for an existing CDHash.
+	for (uint32_t i = 0; i < entryCount; i++) {
+		if (is_cdhash_trustcached_unlocked(entries[i].hash)) continue;
+		bool duplicate = false;
+		for (uint32_t j = 0; j < pendingEntryCount; j++) {
+			if (memcmp(pendingEntries[j].hash, entries[i].hash, sizeof(cdhash_t)) == 0) {
+				duplicate = true;
+				break;
+			}
+		}
+		if (!duplicate) pendingEntries[pendingEntryCount++] = entries[i];
+	}
+
+	uint32_t insertedEntryCount = 0;
+	uint32_t remainingEntryCount = pendingEntryCount;
 	while (remainingEntryCount > 0) {
 		__block uint64_t freeJbTcKaddr = 0;
 		__block uint32_t freeJbTcCurrentLength = 0;
+		__block bool invalidLength = false;
 		_jb_trustcache_enumerate(^(uint64_t jbTcKaddr, bool *stop) {
 			uint32_t length = kread32(jbTcKaddr + offsetof(jb_trustcache, file.length));
+			if (length > JB_TRUSTCACHE_ENTRY_COUNT) {
+				invalidLength = true;
+				*stop = true;
+				return;
+			}
 			if (length < JB_TRUSTCACHE_ENTRY_COUNT) {
 				freeJbTcKaddr = jbTcKaddr;
 				freeJbTcCurrentLength = length;
 				*stop = true;
 			}
 		});
+		if (invalidLength) {
+			result = EIO;
+			break;
+		}
 		if (freeJbTcKaddr == 0) {
-			freeJbTcKaddr = _jb_trustcache_grow();
+			result = _jb_trustcache_grow(&freeJbTcKaddr);
+			freeJbTcCurrentLength = 0;
+			if (result != 0) break;
 		}
 
 		uint32_t entryCountToInsert = JB_TRUSTCACHE_ENTRY_COUNT - freeJbTcCurrentLength;
@@ -209,28 +282,51 @@ int jb_trustcache_add_entries(struct trustcache_entry_v1 *entries, uint32_t entr
 			entryCountToInsert = remainingEntryCount;
 		}
 
-		jb_trustcache *jbTc = alloca(JB_TRUSTCACHE_SIZE);
-		kreadbuf(freeJbTcKaddr, jbTc, JB_TRUSTCACHE_SIZE);
+		jb_trustcache *jbTc = malloc(JB_TRUSTCACHE_SIZE);
+		if (!jbTc) {
+			result = ENOMEM;
+			break;
+		}
+		if (kreadbuf(freeJbTcKaddr, jbTc, JB_TRUSTCACHE_SIZE) != 0 ||
+			jbTc->file.length != freeJbTcCurrentLength) {
+			free(jbTc);
+			result = EIO;
+			break;
+		}
 		for (uint32_t i = 0; i < entryCountToInsert; i++) {
-			jbTc->file.entries[freeJbTcCurrentLength+i] = entries[i];
+			jbTc->file.entries[freeJbTcCurrentLength+i] = pendingEntries[insertedEntryCount+i];
 		}
 		jbTc->file.length += entryCountToInsert;
 		_trustcache_file_sort(&jbTc->file);
-		kwritebuf(freeJbTcKaddr, jbTc, JB_TRUSTCACHE_SIZE);
+		if (kwritebuf(freeJbTcKaddr, jbTc, JB_TRUSTCACHE_SIZE) != 0) {
+			free(jbTc);
+			result = EIO;
+			break;
+		}
+		free(jbTc);
+		insertedEntryCount += entryCountToInsert;
 		remainingEntryCount -= entryCountToInsert;
 	}
-	return 0;
+
+	os_unfair_lock_unlock(&gJbTrustCacheLock);
+	free(pendingEntries);
+	return result;
 }
 
 int jb_trustcache_add_cdhashes(cdhash_t *hashes, uint32_t hashCount)
 {
-	struct trustcache_entry_v1 entries[hashCount];
-	for (int i = 0; i < hashCount; i++) {
+	if (hashCount == 0) return 0;
+	if (!hashes) return EINVAL;
+	struct trustcache_entry_v1 *entries = calloc(hashCount, sizeof(*entries));
+	if (!entries) return ENOMEM;
+	for (uint32_t i = 0; i < hashCount; i++) {
 		memcpy(entries[i].hash, hashes[i], sizeof(cdhash_t));
 		entries[i].hash_type = 1;
 		entries[i].flags = 0;
 	}
-	return jb_trustcache_add_entries(entries, hashCount);
+	int result = jb_trustcache_add_entries(entries, hashCount);
+	free(entries);
+	return result;
 }
 
 int jb_trustcache_add_entry(struct trustcache_entry_v1 entry)
@@ -252,10 +348,15 @@ int jb_trustcache_add_directory(const char *directoryPath)
 xpc_object_t jb_trustcache_info(void)
 {
 	xpc_object_t arr = xpc_array_create_empty();
+	os_unfair_lock_lock(&gJbTrustCacheLock);
 	_jb_trustcache_enumerate(^(uint64_t jbTcKaddr, bool *stop) {
 		uuid_t uuid;
 		kreadbuf(jbTcKaddr + offsetof(jb_trustcache, file.uuid), (void *)uuid, sizeof(uuid));
 		uint32_t length = kread32(jbTcKaddr + offsetof(jb_trustcache, file.length));
+		if (length > JB_TRUSTCACHE_ENTRY_COUNT) {
+			*stop = true;
+			return;
+		}
 
 		xpc_object_t tcDict = xpc_dictionary_create_empty();
 		xpc_dictionary_set_data(tcDict, "uuid", &uuid, sizeof(uuid));
@@ -272,16 +373,23 @@ xpc_object_t jb_trustcache_info(void)
 		xpc_array_append_value(arr, tcDict);
 		xpc_release(tcDict);
 	});
+	os_unfair_lock_unlock(&gJbTrustCacheLock);
 	return arr;
 }
 
 void jb_trustcache_debug_print(FILE *f)
 {
 	__block int i = 0;
+	os_unfair_lock_lock(&gJbTrustCacheLock);
 	_jb_trustcache_enumerate(^(uint64_t jbTcKaddr, bool *stop) {
 		uuid_t uuid;
 		kreadbuf(jbTcKaddr + offsetof(jb_trustcache, file.uuid), (void *)uuid, sizeof(uuid));
 		uint32_t length = kread32(jbTcKaddr + offsetof(jb_trustcache, file.length));
+		if (length > JB_TRUSTCACHE_ENTRY_COUNT) {
+			fprintf(f, "Invalid Jailbreak TrustCache length %u at 0x%llx\n", length, jbTcKaddr);
+			*stop = true;
+			return;
+		}
 
 		uint32_t *uuidData = (uint32_t *)uuid;
 		fprintf(f, "Jailbreak TrustCache %d <%08x%08x%08x%08x> (length: %u) (kaddr: 0x%llx):\n", i++, htonl(uuidData[0]), htonl(uuidData[1]), htonl(uuidData[2]), htonl(uuidData[3]), length, jbTcKaddr);
@@ -322,10 +430,10 @@ void jb_trustcache_debug_print(FILE *f)
 			fprintf(f, "\n");
 		}
 	});
-	
+	os_unfair_lock_unlock(&gJbTrustCacheLock);
 }
 
-int trustcache_file_upload(trustcache_file_v1 *tc)
+static int trustcache_file_upload_unlocked(trustcache_file_v1 *tc)
 {
 	uint64_t tcSize = ksizeof(trustcache) + sizeof(trustcache_file_v1) + (tc->length * sizeof(trustcache_entry_v1));
 	if (tcSize > 0x4000) return -1;
@@ -354,8 +462,7 @@ int trustcache_file_upload(trustcache_file_v1 *tc)
 		uint64_t prevTcSize = ksizeof(trustcache) + sizeof(trustcache_file_v1) + (prevTcLength * sizeof(trustcache_entry_v1));
 		if (prevTcSize == tcSize) {
 			// If size is the same this is simple, just replace the file data
-			kwritebuf(prevTcFile, tc, tcSize - ksizeof(trustcache));
-			return 0;
+			return kwritebuf(prevTcFile, tc, tcSize - ksizeof(trustcache));
 		}
 		else {
 			// If not, it gets more complicated and hacky...
@@ -377,21 +484,29 @@ int trustcache_file_upload(trustcache_file_v1 *tc)
 	// kalloc is not guaranteed to be zeroed, make sure trustcache head is zeroed
 	char nullBuf[ksizeof(trustcache)];
 	memset(nullBuf, 0, sizeof(nullBuf));
-	kwritebuf(tcKaddr, nullBuf, sizeof(nullBuf));
+	if (kwritebuf(tcKaddr, nullBuf, sizeof(nullBuf)) != 0) return -1;
 
 	uint64_t tcFileKaddr = tcKaddr + ksizeof(trustcache);
-	kwritebuf(tcFileKaddr, tc, tcSize - ksizeof(trustcache));
+	if (kwritebuf(tcFileKaddr, tc, tcSize - ksizeof(trustcache)) != 0) return -1;
 
-	kwrite64(tcKaddr + koffsetof(trustcache, fileptr), tcFileKaddr);
+	if (kwrite64(tcKaddr + koffsetof(trustcache, fileptr), tcFileKaddr) != 0) return -1;
 	if (koffsetof(trustcache, size)) {
-		kwrite64(tcKaddr + koffsetof(trustcache, size), tcSize);
+		if (kwrite64(tcKaddr + koffsetof(trustcache, size), tcSize) != 0) return -1;
 	}
 	if (koffsetof(trustcache, type)) {
-		kwrite64(tcKaddr + koffsetof(trustcache, type), 0x5);
+		if (kwrite64(tcKaddr + koffsetof(trustcache, type), 0x5) != 0) return -1;
 	}
 
-	trustcache_list_insert(tcKaddr);
-	return 0;
+	return trustcache_list_insert(tcKaddr);
+}
+
+int trustcache_file_upload(trustcache_file_v1 *tc)
+{
+	if (!tc) return -1;
+	os_unfair_lock_lock(&gJbTrustCacheLock);
+	int result = trustcache_file_upload_unlocked(tc);
+	os_unfair_lock_unlock(&gJbTrustCacheLock);
+	return result;
 }
 
 int trustcache_file_upload_with_uuid(trustcache_file_v1 *tc, uuid_t uuid)
@@ -473,7 +588,7 @@ bool trustcache_contains_cdhash(uint64_t tcKaddr, cdhash_t CDHash)
 	return false;
 }
 
-bool is_cdhash_trustcached(cdhash_t CDHash)
+static bool is_cdhash_trustcached_unlocked(cdhash_t CDHash)
 {
 	__block bool inTrustCache = false;
 	_trustcache_list_enumerate(^(uint64_t tcKaddr, bool *stop) {
@@ -483,5 +598,13 @@ bool is_cdhash_trustcached(cdhash_t CDHash)
 			*stop = true;
 		}
 	});
+	return inTrustCache;
+}
+
+bool is_cdhash_trustcached(cdhash_t CDHash)
+{
+	os_unfair_lock_lock(&gJbTrustCacheLock);
+	bool inTrustCache = is_cdhash_trustcached_unlocked(CDHash);
+	os_unfair_lock_unlock(&gJbTrustCacheLock);
 	return inTrustCache;
 }

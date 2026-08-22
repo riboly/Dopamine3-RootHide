@@ -11,7 +11,8 @@
 | 3.0.23 | A1：修复 iOS 18 `ucred` 引用宽度、最终 weak release 和异常 respring | 构建通过，但 21:00 的有效新版本回归仍出现同类 `smr.c:2831` panic，A1 已被设备证伪为不完整 |
 | 3.0.24 | A2：禁止 iOS 17+ 原地修改 credential hash key，统一安全复制/替换 | 设备首次激活在 `kauth_cred_reference_adjust()` 中 SIGSEGV，不能使用 |
 | 3.0.25 | A3：首次激活改为 pinned credential 回退 | 设备仍在同一 mapped credential reference 路径 SIGSEGV，不能使用 |
-| 3.0.26 | A5：weak-only pin，并修复 PTE/full-map 后端分派 | 待构建与设备验证 |
+| 3.0.26 | A5：weak-only pin，并修复 PTE/full-map 后端分派 | 设备可正常月余，自动重启显著减少；运行约 3 小时 13 分后出现新的 launchd trust-cache/IOSurface 路径 SIGEMT，不能关闭稳定性问题 |
+| 3.0.27 | B1：修复 launchd trust-cache 并发、去重、跨页写入及 IOSurface 所有权泄漏 | 待构建与设备验证 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -656,3 +657,92 @@ memoryPressure=false
 ```
 
 设备当时运行 3.0.23；panic 紧随一次 SSH `sudo` 日志枚举发生。这再次排除内存耗尽，并确认 3.0.23 的 credential hash 损坏仍可由 `sudo` 路径触发。后续取证必须以 `mobile` 读取 `/rootfs/private/var/mobile/Library/Logs/CrashReporter`，不得为了读取日志调用 `sudo`，也不得对 RootHide 虚拟 `/var/mobile/Library/Logs` 做递归枚举。
+
+## 17. 3.0.27：launchd trust-cache/IOSurface 稳定性修复
+
+### 3.0.26 设备结果与新 panic 分类
+
+用户确认 3.0.26 比此前版本稳定，自动重启次数明显减少，说明 A5 已消除一部分主要故障；但以下新日志证明仍有独立问题：
+
+```text
+D:\LocalSend\panic-full-2026-08-22-022721.0002.ips
+initproc exited -- exit reason namespace 1 subcode 0x7
+Panicked task: pid 1: launchd
+Compressor 64% (OK)
+memoryPressure=false
+```
+
+`namespace 1 / subcode 0x7` 是 `SIGEMT`。设备从开机到 panic 约 3 小时 13 分，PID 1 的 `residentMemoryBytes` 为 `2,207,316,856`，约 2.06 GiB。系统压缩页、segment 和 swap 均报告 OK，因此这次不是此前的 `ucred_rw / smr.c:2831`，也不能归因于全机内存压力。
+
+日志内用户镜像 UUID 与 3.0.26 最终产物完全匹配：
+
+```text
+image 18  6D22FA2D...  libjailbreak.dylib
+image 19  6F9F2D1D...  launchdhook.dylib
+image 20                 /sbin/launchd
+```
+
+按该精确产物符号化后，退出线程位于 launchd 的 XPC event queue，调用链为：
+
+```text
+xpc_receive_mach_msg_hook
+jbserver_received_xpc_message
+trust_macho_recurse
+jb_trustcache_add_cdhashes
+jb_trustcache_add_entries
+_jb_trustcache_grow
+IOSurface_kalloc
+```
+
+`SIGEMT` 最终发生在 `IOSurface_kalloc` 内。该证据把问题限定在 PID 1 中由并发信任请求触发的 trust-cache 扩容与 IOSurface 生命周期，而不是 credential 或普通 App。
+
+### B1 根因
+
+旧实现同时存在以下缺陷：
+
+1. `IOSurfaceCreate()` 返回的 `IOSurfaceRef` 只执行 `IOSurfaceDecrementUseCount()`，没有平衡 `CFRelease()`；global kalloc 将 ranges 从 IOSurface 脱离后仍永久保留 Mach send right。每次新建 16 KiB trust-cache 页都会把 IOSurface 对象和相关 VM 资源积累在 launchd 中。
+2. trust-cache 查询、追加、清空和整表上传没有共享锁。多个 XPC event 可同时选择同一个空闲页、排序并覆盖整页，或在链表替换/释放期间遍历它。
+3. 收集 CDHash 与写入之间没有锁内二次去重；同一批次也不去重，重复信任请求会不必要地扩容 global kalloc。
+4. 输入跨过一个 trust-cache 页时，旧循环始终从 `entries[0]` 复制，后续页会重复首段条目。
+5. `_jb_trustcache_grow()` 失败返回零地址后，调用方仍继续读写；多条 kernel read/write/list-insert 失败也被吞掉并向 XPC 报告成功。
+6. 每次追加在栈上分配完整 trust-cache 页；在 launchd 的 XPC worker 中没有必要承担该栈压力。
+
+### B1 修复
+
+- IOSurface dummy page 通过 `dispatch_once` 初始化；检查用户区分配、CF 对象、Mach port、send right、surface 和 kernel read/write 结果。
+- 平衡释放临时 `IOSurfaceRef`。global kalloc 只有在 ranges 与 range count 成功脱离后才释放 Mach send right；中间写失败时保留对象或停止，避免返回已经失效的内核地址。
+- trust-cache 查询、追加、清空和整表上传共用 `os_unfair_lock`。锁内重新检查 live trust-cache，并过滤批内重复 CDHash。
+- 使用累计 `insertedEntryCount` 修正跨页输入偏移；完整页临时缓冲和 CDHash entry 数组改为 heap allocation，并在不可回收的 kernel allocation 之前完成用户态页分配。
+- 校验现有页 length、扩容地址和读回 length；区分 `ENOMEM`、`EIO`、`EINVAL` 并沿 local、systemwide、RootHide XPC 调用链向上返回。
+- trust-cache 信息与调试读取也限制动态页 length，损坏页不会驱动 PID 1 越界遍历。
+- 链表头、next/prev、整表内容和 clear 的 kernel 写入均检查返回值。插入或初始化失败后不继续访问零地址。
+
+扩容已经完成 kernel allocation、但后续 kernel 写入或链表插入失败时，无法证明该对象对所有内核读者都不可达，因此 B1 选择不做危险回滚，最多保留一次 16 KiB allocation。该有限错误路径泄漏优先于释放仍可能被引用的 trust-cache 页；正常成功路径不再保留 IOSurface/Mach right。
+
+产物标记：
+
+```text
+TRUSTCACHE-IOSURFACE-18B1
+```
+
+### 3.0.27 回归要求
+
+构建核验必须确认 3.0.27、arm64/arm64e 切片，以及以下三个标记进入最终 `basebin.tar`：
+
+```text
+UCRED-SMR-18A5
+TRUSTCACHE-IOSURFACE-18B1
+RESPRING-IOS18-BBD1
+```
+
+设备覆盖安装后必须由用户完成以下验证：
+
+1. 确认 `/basebin/.version = 3.0.27`，并记录 `/basebin/.build`。
+2. 正常使用 Sileo 刷新与安装、Zebra、OpenSSH/SSH、Frida，以及会触发递归 Mach-O 信任的插件安装流程。
+3. 观察 launchd 内存是否仍持续异常增长，并检查是否再次出现 `initproc exited / namespace 1 / subcode 0x7`。
+4. 同时继续观察旧的 `ucred_rw / smr.c:2831` 是否复现；B1 不改变 A5 credential 设计。
+5. 构建成功和短时可用都不能宣布问题关闭，必须经过真实设备的持续稳定性观察。
+
+### 3.0.27 构建记录
+
+待 GitHub Actions 构建与产物核验后补充。

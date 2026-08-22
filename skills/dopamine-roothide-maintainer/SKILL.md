@@ -30,12 +30,13 @@ logic.
 7. Never replace a GUI app with `kernproc`'s complete credential. During first activation, before launchdhook can create a donor, the narrow fallback is to pin only the app credential's mutable `ucred_rw` weak reference for the rest of that boot, verify the pointer is unchanged, then mutate only that pinned credential. Never release the weak pin or reuse this fallback for recurring daemon/service paths.
 8. Credential reference helpers that require an atomic mapped access must dispatch through `gPrimitives.physaccess_mapped`. Do not call the full-range `physrw_phystouaddr` mapping directly: A12 and other supported devices can use the single-page PTE window backend, and a direct `PPLRW_USER_MAPPING_OFFSET` access will SIGSEGV.
 9. Audit every credential path, not only the one present in the panic stack: initial privilege elevation, get/drop root, setuid check-in, root credential borrowing, sandbox changes, and finalization can share the same corrupted hash lifecycle.
-10. Make the smallest change that preserves user data and existing RootHide invariants.
-11. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
-12. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
-13. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
-14. Validate on the device. For persistence fixes, capture source file names and checksums before reboot, then compare them after reboot and reactivation.
-15. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
+10. Treat launchd trust-cache requests as a critical section. Release temporary IOSurface references and Mach rights, deduplicate CDHashes under the mutation lock, and propagate allocation or kernel I/O failures to the caller; never continue from a zero kernel address in PID 1.
+11. Make the smallest change that preserves user data and existing RootHide invariants.
+12. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
+13. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
+14. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
+15. Validate on the device. For persistence fixes, capture source file names and checksums before reboot, then compare them after reboot and reactivation.
+16. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
 
 ## Device Interpretation
 

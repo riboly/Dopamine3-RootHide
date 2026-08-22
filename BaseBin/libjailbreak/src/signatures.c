@@ -33,8 +33,9 @@ static int jbclient_trust_file_local_impl(int fd)
 	uint32_t cdhashesCount = 0;
 	file_collect_untrusted_cdhashes(fd, &cdhashes, &cdhashesCount);
 	if (cdhashes && cdhashesCount > 0) {
-		jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
+		int trustCacheResult = jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
 		free(cdhashes);
+		if (trustCacheResult != 0) return trustCacheResult;
 	}
 
 	struct siginfo *sigInfos = NULL;
@@ -381,7 +382,12 @@ int trust_signatures(int pid, int fd, struct siginfo *sigInfos, uint32_t sigInfo
 	}
 
 	if (cdhashesCount > 0) {
-		jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
+		int trustCacheResult = jb_trustcache_add_cdhashes(cdhashes, cdhashesCount);
+		if (trustCacheResult != 0) {
+			free(sigInfosToAttach);
+			free(cdhashes);
+			return trustCacheResult;
+		}
 	}
 
 	int r = 0;

@@ -81,8 +81,9 @@ int jb_trustcache_add_file(const char *filePath)
 	file_collect_untrusted_cdhashes_by_path(filePath, &cdhashes, &cdhashCount);
 
 	if (cdhashes && cdhashCount > 0) {
-		jb_trustcache_add_cdhashes(cdhashes, cdhashCount);
+		int result = jb_trustcache_add_cdhashes(cdhashes, cdhashCount);
 		free(cdhashes);
+		return result;
 	}
 
 	return 0;
@@ -96,8 +97,9 @@ int jb_trustcache_add_directory(const char *directoryPath, bool recursive)
 	directory_collect_untrusted_cdhashes_by_path(directoryPath, recursive, &cdhashes, &cdhashCount);
 	if (cdhashes && cdhashCount > 0) {
 		printf("Added %u cdhashes\n", cdhashCount);
-		jb_trustcache_add_cdhashes(cdhashes, cdhashCount);
+		int result = jb_trustcache_add_cdhashes(cdhashes, cdhashCount);
 		free(cdhashes);
+		return result;
 	}
 
 	return 0;

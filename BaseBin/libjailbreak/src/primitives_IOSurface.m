@@ -30,8 +30,9 @@ uint64_t IOSurfaceSendRight_get_surface(uint64_t surfaceSendRight)
 		uint32_t zoneSize = 0x30;
 		uint64_t readOffset = zoneSize - gPrimitives.krwMinSafeReadSize;
 		uint8_t buf[gPrimitives.krwMinSafeReadSize];
+		memset(buf, 0, sizeof(buf));
 
-		kreadbuf(surfaceSendRight + readOffset, buf, sizeof(buf));
+		if (kreadbuf(surfaceSendRight + readOffset, buf, sizeof(buf)) != 0) return 0;
 		return UNSIGN_PTR(*(uint64_t *)&buf[0x18 - readOffset]);
 	}
 	return kread_ptr(surfaceSendRight + 0x18);
@@ -42,9 +43,9 @@ uint64_t IOSurface_get_ranges(uint64_t surface)
 	return kread_ptr(surface + koffsetof(IOSurface, ranges));
 }
 
-void IOSurface_set_ranges(uint64_t surface, uint64_t ranges)
+int IOSurface_set_ranges(uint64_t surface, uint64_t ranges)
 {
-	kwrite64(surface + koffsetof(IOSurface, ranges), ranges);
+	return kwrite64(surface + koffsetof(IOSurface, ranges), ranges);
 }
 
 uint64_t IOSurface_get_memoryDescriptor(uint64_t surface)
@@ -97,21 +98,23 @@ uint64_t IOSurface_get_rangeCount(uint64_t surface)
 	return kread_ptr(surface + koffsetof(IOSurface, rangeCount));
 }
 
-void IOSurface_set_rangeCount(uint64_t surface, uint32_t rangeCount)
+int IOSurface_set_rangeCount(uint64_t surface, uint32_t rangeCount)
 {
-	kwrite32(surface + koffsetof(IOSurface, rangeCount), rangeCount);
+	return kwrite32(surface + koffsetof(IOSurface, rangeCount), rangeCount);
 }
 
 uint64_t IOSurface_port_getSendRight(mach_port_t surfaceMachPort)
 {
 	uint64_t surfaceSendRight = task_get_ipc_port_kobject(task_self(), surfaceMachPort);
+	if (!surfaceSendRight) return 0;
 	if (koffsetof(IOMachPort, object)) {
 		if (gPrimitives.krwMinSafeReadSize > 0x8) {
 			uint32_t zoneSize = koffsetof(IOMachPort, object) + 0x8;
 			uint64_t readOffset = zoneSize - gPrimitives.krwMinSafeReadSize;
 			uint8_t buf[gPrimitives.krwMinSafeReadSize];
+			memset(buf, 0, sizeof(buf));
 
-			kreadbuf(surfaceSendRight + readOffset, buf, sizeof(buf));
+			if (kreadbuf(surfaceSendRight + readOffset, buf, sizeof(buf)) != 0) return 0;
 			surfaceSendRight = UNSIGN_PTR(*(uint64_t *)&buf[sizeof(buf) - 0x8]);
 		}
 		else {
@@ -235,15 +238,21 @@ static mach_port_t IOSurface_kalloc_getSurfacePort(uint64_t size)
 
 static mach_port_t IOSurface_kalloc_getSurfacePort_16up(uint64_t size)
 {
+	if (size == 0 || size > 0x10000) return MACH_PORT_NULL;
 	uint64_t rangesAlignedSize = ((size + 0xf) & ~0xf);
 
 	static vm_size_t dummyPageSize = 0x4000;
 	static vm_address_t dummyPage = 0;
-	if (dummyPage == 0) {
-		vm_allocate(mach_task_self(), &dummyPage, dummyPageSize, VM_FLAGS_ANYWHERE);
-	}
+	static dispatch_once_t dummyPageOnce;
+	dispatch_once(&dummyPageOnce, ^{
+		if (vm_allocate(mach_task_self(), &dummyPage, dummyPageSize, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
+			dummyPage = 0;
+		}
+	});
+	if (dummyPage == 0) return MACH_PORT_NULL;
 
-	uint64_t *userspaceRanges = malloc(rangesAlignedSize);
+	uint64_t *userspaceRanges = calloc(1, rangesAlignedSize);
+	if (!userspaceRanges) return MACH_PORT_NULL;
 	for (int i = 0; i < (rangesAlignedSize / sizeof(uint64_t)); i += 2) {
 		userspaceRanges[i] = dummyPage;
 		userspaceRanges[i+1] = dummyPageSize;
@@ -251,15 +260,25 @@ static mach_port_t IOSurface_kalloc_getSurfacePort_16up(uint64_t size)
 
 	CFDataRef userspaceRangesData = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)userspaceRanges, rangesAlignedSize);
 	free(userspaceRanges);
+	if (!userspaceRangesData) return MACH_PORT_NULL;
 
 	CFMutableDictionaryRef dict = CFDictionaryCreateMutable(NULL, 0, NULL, NULL);
 	CFNumberRef dummyPageSizeNum = CFNUM64(dummyPageSize);
+	if (!dict || !dummyPageSizeNum) {
+		if (dict) CFRelease(dict);
+		if (dummyPageSizeNum) CFRelease(dummyPageSizeNum);
+		CFRelease(userspaceRangesData);
+		return MACH_PORT_NULL;
+	}
 	CFDictionarySetValue(dict, CFSTR("IOSurfaceAllocSize"), dummyPageSizeNum);
 	CFDictionarySetValue(dict, CFSTR("IOSurfaceAddressRanges"), userspaceRangesData);
 
 	IOSurfaceRef surfaceRef = IOSurfaceCreate(dict);
 	mach_port_t port = surfaceRef ? IOSurfaceCreateMachPort(surfaceRef) : MACH_PORT_NULL;
-	if (surfaceRef) IOSurfaceDecrementUseCount(surfaceRef);
+	if (surfaceRef) {
+		IOSurfaceDecrementUseCount(surfaceRef);
+		CFRelease(surfaceRef);
+	}
 	CFRelease(userspaceRangesData);
 	CFRelease(dummyPageSizeNum);
 	CFRelease(dict);
@@ -275,7 +294,15 @@ static uint64_t IOSurface_kalloc_16up(uint64_t size, bool leak)
 		if (!MACH_PORT_VALID(surfaceMachPort)) return 0;
 
 		uint64_t surfaceSendRight = IOSurface_port_getSendRight(surfaceMachPort);
+		if (!surfaceSendRight) {
+			mach_port_deallocate(mach_task_self(), surfaceMachPort);
+			return 0;
+		}
 		uint64_t surface = IOSurfaceSendRight_get_surface(surfaceSendRight);
+		if (!surface) {
+			mach_port_deallocate(mach_task_self(), surfaceMachPort);
+			return 0;
+		}
 		uint64_t va = IOSurface_get_ranges(surface);
 		uint64_t vaSize = IOSurface_get_rangeCount(surface) * 0x10;
 
@@ -285,8 +312,18 @@ static uint64_t IOSurface_kalloc_16up(uint64_t size, bool leak)
 		}
 
 		if (leak) {
-			IOSurface_set_ranges(surface, 0);
-			IOSurface_set_rangeCount(surface, 0);
+			if (IOSurface_set_ranges(surface, 0) != 0) {
+				mach_port_deallocate(mach_task_self(), surfaceMachPort);
+				return 0;
+			}
+			if (IOSurface_set_rangeCount(surface, 0) != 0) {
+				// The ranges pointer is already detached. Keep the send right alive
+				// rather than destroying a partially modified IOSurface object.
+				return 0;
+			}
+			// The detached ranges are the global allocation. The IOSurface and
+			// send right are no longer needed and must not accumulate in launchd.
+			mach_port_deallocate(mach_task_self(), surfaceMachPort);
 		}
 
 		return va;

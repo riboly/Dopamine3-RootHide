@@ -106,8 +106,7 @@ static int root_trustcache_add_cdhash(uint8_t *cdhashData, size_t cdhashLen)
 
 static int root_trustcache_clear(void)
 {
-	jb_trustcache_clear();
-	return 0;
+	return jb_trustcache_clear();
 }
 
 struct jbserver_domain gRootDomain = {
