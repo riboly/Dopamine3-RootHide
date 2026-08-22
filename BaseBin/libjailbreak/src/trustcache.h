@@ -16,6 +16,7 @@ int trustcache_list_insert(uint64_t tcKaddr);
 int jb_trustcache_add_entries(struct trustcache_entry_v1 *entries, uint32_t entryCount);
 int jb_trustcache_add_entry(trustcache_entry_v1 entry);
 int jb_trustcache_add_cdhashes(cdhash_t *hashes, uint32_t hashCount);
+int jb_trustcache_restore_persistent(void);
 xpc_object_t jb_trustcache_info(void);
 int jb_trustcache_clear(void);
 

@@ -187,6 +187,7 @@ jobs:
 
           strings BaseBin/.build/libjailbreak.dylib | grep -F "UCRED-SMR-18A5"
           strings BaseBin/.build/libjailbreak.dylib | grep -F "TRUSTCACHE-IOSURFACE-18B1"
+          strings BaseBin/.build/libjailbreak.dylib | grep -F "TRUSTCACHE-PERSIST-18C1"
           strings BaseBin/.build/systemhook.dylib | grep -F "RESPRING-IOS18-BBD1"
 
           version="$(cat BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)"

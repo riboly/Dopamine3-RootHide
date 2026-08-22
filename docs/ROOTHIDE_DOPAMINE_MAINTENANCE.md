@@ -13,6 +13,7 @@
 | 3.0.25 | A3：首次激活改为 pinned credential 回退 | 设备仍在同一 mapped credential reference 路径 SIGSEGV，不能使用 |
 | 3.0.26 | A5：weak-only pin，并修复 PTE/full-map 后端分派 | 设备可正常月余，自动重启显著减少；运行约 3 小时 13 分后出现新的 launchd trust-cache/IOSurface 路径 SIGEMT，不能关闭稳定性问题 |
 | 3.0.27 | B1：修复 launchd trust-cache 并发、去重、跨页写入及 IOSurface 所有权泄漏 | 待构建与设备验证 |
+| 3.0.28 | C1：通用动态 trust-cache 注册表与激活期恢复 | 待构建与设备重启周期验证 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -746,3 +747,54 @@ RESPRING-IOS18-BBD1
 ### 3.0.27 构建记录
 
 待 GitHub Actions 构建与产物核验后补充。
+
+## 18. 3.0.28：第三方动态 trust-cache 持久恢复
+
+### 问题边界
+
+3.0.27 保证动态 trust cache 的内核创建、扩容、写入和并发更新稳定，但动态页仍只存在于内核内存。完整重启后，TrollFools、包管理器、签名工具和其他 RootHide API 调用方此前登记的 CDHash 会消失；App 容器中的 Loader、插件和依赖文件仍然存在。dyld 随后能解析文件路径，AMFI 却会拒绝映射未重新受信的 CDHash，表面上可能显示闪退或误导性的 `Library missing`。
+
+这不是 TrollFools 专属问题，也不应通过扫描 Telegram 等普通 App 容器、创建 `_TrollStoreLite` 标记、保存工具专属路径或降低 AMFI/签名校验来解决。正确的所有权边界是 `jb_trustcache_add_entries()`：所有成功通过 RootHide 动态信任入口登记的第三方条目都在此处统一持久化。
+
+### C1 设计
+
+- 注册表位于 `JBROOT_PATH("/var/mobile/Library/RootHide/dynamic-trustcache-v1.bin")`。它跟随 RootHide 可写 AppGroup 的 brand 重命名，不依赖设备特定 `.jbroot-*` 路径。
+- 文件保存完整 `trustcache_entry_v1`，包含 magic、格式版本、头大小、条目大小、条目数、头部 CRC32 和负载 CRC32。最大条目数固定为 32768；异常大小、重复/乱序 hash、截断、尾随数据或校验失败均拒绝加载。
+- 锁文件与注册表继承 RootHide 目录的 `mobile:mobile` 所有权并保持 `0600`，确保 PID 1 写入后下次 Dopamine 激活仍可读取，同时不开放给其他 UID。写入使用同目录临时文件、完整写循环、`F_FULLFSYNC`/`fsync` 和原子 `rename`；目录同步在文件系统支持时执行，iOS 明确返回 `EINVAL/ENOTSUP` 时不把已完成的原子替换误报为失败。独立锁文件协调 Dopamine 激活进程与 launchd 中的后续登记。
+- 内核 trust-cache 修改仍只在 `gJbTrustCacheLock` 下执行；磁盘 I/O 在该 unfair lock 之外。新增、恢复和显式 clear 另由操作级 mutex 串行化，避免 `clear` 与新增在同一进程内交错。
+- 内核更新成功后持久化调用方显式请求的全部条目，而不只保存本次 live cache 中的新条目。这样一次落盘失败后，调用方重试能够补写注册表，即使 CDHash 已在当前内核页中。
+- 若内核追加只完成一部分后失败，只镜像已经实际插入的前缀，并向调用方返回内核错误。持久化失败不会撤销当前内核信任，但会返回 errno 并写入统一日志标记，调用方不得把它当作完整成功。
+- Dopamine 在 `load_basebin_trustcache()` 之后、注入 launchdhook 之前一次性读取并恢复注册表。恢复调用内部插入函数，明确关闭再次持久化，避免递归写盘。
+- 首次原地升级时，恢复器还会枚举当前内核中已有的 `jb_trustcache` 动态页并合并进注册表，从而自动迁移 3.0.27 本次开机仍存活的第三方条目。固定 UUID trust cache 不属于该页类型，因此不会被导入。
+- basebin 与 dyld 固定 UUID trust cache 继续使用 `trustcache_file_upload_with_uuid()`，不会进入第三方动态注册表。
+- `jbctl trustcache clear` 只有在内核动态页清空成功后才原子写入空注册表。清空注册表失败会向调用方返回错误，旧注册表不会被静默视为已清除。
+
+注册表按授予过的 CDHash 管理，不保存文件路径，也不主动判断文件是否仍存在。旧 CDHash 会保留到显式 `trustcache clear`；这是避免扫描任意 App 容器和避免工具专属耦合的直接代价。达到 32768 项时拒绝继续持久化并返回 `ENOSPC`，不得静默淘汰仍可能需要的信任。
+
+产物标记：
+
+```text
+TRUSTCACHE-PERSIST-18C1
+```
+
+### 升级与验证要求
+
+3.0.28 能在原地升级激活时自动迁移当前内核动态页。它无法追溯在安装前已经因完整重启而消失、且之后没有重新登记的历史 CDHash；这种情况下对应工具仍需成功执行一次正常信任流程。首次持久性重启测试前必须确认注册表已经包含目标 CDHash，不得把安装前就不存在的条目误判为恢复器失效。
+
+构建核验必须确认 3.0.28、arm64/arm64e 切片，以及以下标记进入最终 `basebin.tar`：
+
+```text
+UCRED-SMR-18A5
+TRUSTCACHE-IOSURFACE-18B1
+TRUSTCACHE-PERSIST-18C1
+RESPRING-IOS18-BBD1
+```
+
+设备验证必须由用户分别授权覆盖安装和完整重启，并至少完成：
+
+1. 安装前记录当前动态 CDHash；安装 3.0.28 后，让 TrollFools 及至少一个其他 RootHide 信任调用方各执行一次正常登记。
+2. 检查注册表为普通 `0600` 文件，校验格式、条目数及目标 CDHash；不得修改 App 容器或创建 TrollStore 标记来辅助测试。
+3. 完整重启并重新月余后，在启动这些第三方工具之前检查目标 CDHash 已恢复到动态 trust cache。
+4. 直接启动先前注入的 App，确认 Loader、插件和依赖可映射；同时检查 `TRUSTCACHE-PERSIST-18C1` 恢复日志。
+5. 显式执行 `trustcache clear` 的破坏性回归必须另行授权；若执行，应确认当前动态页与持久注册表同时清空，下一次激活不会恢复旧条目。
+6. 构建成功、注册表生成或单次 App 启动均不能单独宣布修复完成，必须通过完整重启周期。

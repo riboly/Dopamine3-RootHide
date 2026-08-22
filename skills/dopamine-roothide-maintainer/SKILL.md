@@ -31,12 +31,14 @@ logic.
 8. Credential reference helpers that require an atomic mapped access must dispatch through `gPrimitives.physaccess_mapped`. Do not call the full-range `physrw_phystouaddr` mapping directly: A12 and other supported devices can use the single-page PTE window backend, and a direct `PPLRW_USER_MAPPING_OFFSET` access will SIGSEGV.
 9. Audit every credential path, not only the one present in the panic stack: initial privilege elevation, get/drop root, setuid check-in, root credential borrowing, sandbox changes, and finalization can share the same corrupted hash lifecycle.
 10. Treat launchd trust-cache requests as a critical section. Release temporary IOSurface references and Mach rights, deduplicate CDHashes under the mutation lock, and propagate allocation or kernel I/O failures to the caller; never continue from a zero kernel address in PID 1.
-11. Make the smallest change that preserves user data and existing RootHide invariants.
-12. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
-13. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
-14. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
-15. Validate on the device. For persistence fixes, capture source file names and checksums before reboot, then compare them after reboot and reactivation.
-16. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
+11. Persist third-party dynamic trust at the shared `jb_trustcache_add_entries()` boundary. Store versioned, bounded, checksummed entries under the dynamically mapped RootHide writable root; use atomic replacement and restore after basebin trust loads but before launchdhook injection. During an in-place upgrade, import existing live `jb_trustcache` pages before launchd handoff. Do not scan ordinary App containers, depend on `_TrollStoreLite`, persist tool-specific paths, or include fixed basebin/dyld UUID trust caches.
+12. Treat persistent trust as an explicit grant registry: old CDHashes remain until a successful explicit `trustcache clear`, and clear must update the kernel cache and persistent registry as one serialized operation. Never silently evict entries at the size limit or overwrite a malformed registry.
+13. Make the smallest change that preserves user data and existing RootHide invariants.
+14. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
+15. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
+16. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
+17. Validate on the device. For dynamic trust persistence, seed each pre-existing tool once after upgrading, record target CDHashes and the registry before reboot, then prove those hashes are restored before the tools or affected apps are launched after reboot.
+18. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
 
 ## Device Interpretation
 

@@ -104,7 +104,7 @@ void print_usage(void)
 Available commands:\n\
 	proc_set_debugged <pid>\t\tMarks the process with the given pid as being debugged, allowing invalid code pages inside of it\n\
 	trustcache info\t\t\tPrint info about all jailbreak related trustcaches and the cdhashes contained in them\n\
-	trustcache clear\t\tClears all existing cdhashes from the jailbreaks trustcache\n\
+	trustcache clear\t\tClears current and persistent jailbreak trustcache cdhashes\n\
 	trustcache add /path/to/macho\t\tAdd the cdhash of a macho to the jailbreaks trustcache\n\
 	trollstore_apps list\t\tList apps installed through TrollStore or TrollStore Lite\n\
 	trollstore_apps uninstall <bundle-id>...\tSafely uninstall marker-validated TrollStore apps\n\

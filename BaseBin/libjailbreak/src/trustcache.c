@@ -5,12 +5,17 @@
 #include <unistd.h>
 #include <errno.h>
 #include <os/lock.h>
+#include <os/log.h>
+#include <pthread.h>
 #include "kernel.h"
 #include "info.h"
 #include "primitives.h"
+#include "trustcache_persistence.h"
 
 static const char kTrustCacheStabilityMarker[] __attribute__((used)) = "TRUSTCACHE-IOSURFACE-18B1";
+static const char kTrustCachePersistenceMarker[] __attribute__((used)) = "TRUSTCACHE-PERSIST-18C1";
 static os_unfair_lock gJbTrustCacheLock = OS_UNFAIR_LOCK_INIT;
+static pthread_mutex_t gJbTrustCacheOperationLock = PTHREAD_MUTEX_INITIALIZER;
 static bool is_cdhash_trustcached_unlocked(cdhash_t CDHash);
 
 void _trustcache_file_init(trustcache_file_v1 *file)
@@ -177,6 +182,9 @@ void _jb_trustcache_enumerate(void (^enumerateBlock)(uint64_t jbTcKaddr, bool *s
 
 int jb_trustcache_clear(void)
 {
+	int lockResult = pthread_mutex_lock(&gJbTrustCacheOperationLock);
+	if (lockResult != 0) return lockResult;
+
 	__block int result = 0;
 	os_unfair_lock_lock(&gJbTrustCacheLock);
 	_jb_trustcache_enumerate(^(uint64_t jbTcKaddr, bool *stop) {
@@ -186,6 +194,14 @@ int jb_trustcache_clear(void)
 		}
 	});
 	os_unfair_lock_unlock(&gJbTrustCacheLock);
+	if (result == 0) {
+		int persistenceResult = jb_trustcache_persistent_clear();
+		if (persistenceResult != 0) {
+			os_log_error(OS_LOG_DEFAULT, "[TRUSTCACHE-PERSIST-18C1] failed to clear registry: %{public}d", persistenceResult);
+			result = persistenceResult;
+		}
+	}
+	pthread_mutex_unlock(&gJbTrustCacheOperationLock);
 	return result;
 }
 
@@ -221,8 +237,11 @@ static int _jb_trustcache_grow(uint64_t *jbTcKernOut)
 	return 0;
 }
 
-int jb_trustcache_add_entries(struct trustcache_entry_v1 *entries, uint32_t entryCount)
+static int jb_trustcache_add_entries_internal(struct trustcache_entry_v1 *entries, uint32_t entryCount,
+	trustcache_entry_v1 **insertedEntriesOut, uint32_t *insertedEntryCountOut)
 {
+	if (insertedEntriesOut) *insertedEntriesOut = NULL;
+	if (insertedEntryCountOut) *insertedEntryCountOut = 0;
 	if (entryCount == 0) return 0;
 	if (!entries) return EINVAL;
 
@@ -309,8 +328,42 @@ int jb_trustcache_add_entries(struct trustcache_entry_v1 *entries, uint32_t entr
 	}
 
 	os_unfair_lock_unlock(&gJbTrustCacheLock);
-	free(pendingEntries);
+	if (insertedEntriesOut) {
+		*insertedEntriesOut = pendingEntries;
+	}
+	else {
+		free(pendingEntries);
+	}
+	if (insertedEntryCountOut) *insertedEntryCountOut = insertedEntryCount;
 	return result;
+}
+
+int jb_trustcache_add_entries(struct trustcache_entry_v1 *entries, uint32_t entryCount)
+{
+	int lockResult = pthread_mutex_lock(&gJbTrustCacheOperationLock);
+	if (lockResult != 0) return lockResult;
+
+	trustcache_entry_v1 *insertedEntries = NULL;
+	uint32_t insertedEntryCount = 0;
+	int result = jb_trustcache_add_entries_internal(entries, entryCount, &insertedEntries, &insertedEntryCount);
+	int persistenceResult = 0;
+	const trustcache_entry_v1 *entriesToPersist = result == 0 ? entries : insertedEntries;
+	uint32_t entryCountToPersist = result == 0 ? entryCount : insertedEntryCount;
+	if (entryCountToPersist > 0) {
+		// Persist every explicitly requested entry after a successful kernel
+		// update. This makes a retry repair an earlier disk-write failure even
+		// when the live trust cache now reports every CDHash as a duplicate.
+		persistenceResult = jb_trustcache_persistent_merge(entriesToPersist, entryCountToPersist);
+		if (persistenceResult != 0) {
+			os_log_error(OS_LOG_DEFAULT,
+				"[TRUSTCACHE-PERSIST-18C1] failed to persist %{public}u requested entries: %{public}d",
+				entryCountToPersist, persistenceResult);
+		}
+	}
+	free(insertedEntries);
+	pthread_mutex_unlock(&gJbTrustCacheOperationLock);
+
+	return result != 0 ? result : persistenceResult;
 }
 
 int jb_trustcache_add_cdhashes(cdhash_t *hashes, uint32_t hashCount)
@@ -332,6 +385,100 @@ int jb_trustcache_add_cdhashes(cdhash_t *hashes, uint32_t hashCount)
 int jb_trustcache_add_entry(struct trustcache_entry_v1 entry)
 {
 	return jb_trustcache_add_entries(&entry, 1);
+}
+
+static int jb_trustcache_copy_live_entries(trustcache_entry_v1 **entriesOut, uint32_t *entryCountOut)
+{
+	if (!entriesOut || !entryCountOut) return EINVAL;
+	*entriesOut = NULL;
+	*entryCountOut = 0;
+
+	__block int result = 0;
+	__block uint32_t totalEntryCount = 0;
+	os_unfair_lock_lock(&gJbTrustCacheLock);
+	_jb_trustcache_enumerate(^(uint64_t jbTcKaddr, bool *stop) {
+		uint32_t length = kread32(jbTcKaddr + offsetof(jb_trustcache, file.length));
+		if (length > JB_TRUSTCACHE_ENTRY_COUNT ||
+			length > JB_TRUSTCACHE_PERSISTENT_MAX_ENTRIES - totalEntryCount) {
+			result = length > JB_TRUSTCACHE_ENTRY_COUNT ? EIO : ENOSPC;
+			*stop = true;
+			return;
+		}
+		totalEntryCount += length;
+	});
+
+	trustcache_entry_v1 *entries = NULL;
+	if (result == 0 && totalEntryCount > 0) {
+		entries = calloc(totalEntryCount, sizeof(*entries));
+		if (!entries) result = ENOMEM;
+	}
+	if (result == 0 && totalEntryCount > 0) {
+		__block uint32_t copiedEntryCount = 0;
+		_jb_trustcache_enumerate(^(uint64_t jbTcKaddr, bool *stop) {
+			uint32_t length = kread32(jbTcKaddr + offsetof(jb_trustcache, file.length));
+			if (length > JB_TRUSTCACHE_ENTRY_COUNT || length > totalEntryCount - copiedEntryCount) {
+				result = EIO;
+				*stop = true;
+				return;
+			}
+			if (length > 0 && kreadbuf(jbTcKaddr + offsetof(jb_trustcache, file.entries),
+				&entries[copiedEntryCount], (size_t)length * sizeof(*entries)) != 0) {
+				result = EIO;
+				*stop = true;
+				return;
+			}
+			copiedEntryCount += length;
+		});
+		if (result == 0 && copiedEntryCount != totalEntryCount) result = EIO;
+	}
+	os_unfair_lock_unlock(&gJbTrustCacheLock);
+
+	if (result != 0) {
+		free(entries);
+		return result;
+	}
+	*entriesOut = entries;
+	*entryCountOut = totalEntryCount;
+	return 0;
+}
+
+int jb_trustcache_restore_persistent(void)
+{
+	int lockResult = pthread_mutex_lock(&gJbTrustCacheOperationLock);
+	if (lockResult != 0) return lockResult;
+
+	trustcache_entry_v1 *liveEntries = NULL;
+	uint32_t liveEntryCount = 0;
+	int result = jb_trustcache_copy_live_entries(&liveEntries, &liveEntryCount);
+
+	trustcache_entry_v1 *persistentEntries = NULL;
+	uint32_t persistentEntryCount = 0;
+	if (result == 0) {
+		result = jb_trustcache_persistent_load(&persistentEntries, &persistentEntryCount);
+	}
+	if (result == 0 && persistentEntryCount > 0) {
+		result = jb_trustcache_add_entries_internal(persistentEntries, persistentEntryCount, NULL, NULL);
+	}
+	if (result == 0 && liveEntryCount > 0) {
+		// Import entries left by an older Dopamine during an in-place upgrade.
+		// Fixed basebin/dyld UUID caches are not jb_trustcache pages and are
+		// intentionally excluded by jb_trustcache_copy_live_entries().
+		result = jb_trustcache_persistent_merge(liveEntries, liveEntryCount);
+	}
+	if (result != 0) {
+		os_log_error(OS_LOG_DEFAULT,
+			"[TRUSTCACHE-PERSIST-18C1] restore failed registry=%{public}u live=%{public}u result=%{public}d",
+			persistentEntryCount, liveEntryCount, result);
+	}
+	else {
+		os_log(OS_LOG_DEFAULT,
+			"[TRUSTCACHE-PERSIST-18C1] restored registry=%{public}u imported-live=%{public}u",
+			persistentEntryCount, liveEntryCount);
+	}
+	free(persistentEntries);
+	free(liveEntries);
+	pthread_mutex_unlock(&gJbTrustCacheOperationLock);
+	return result;
 }
 
 
