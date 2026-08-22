@@ -10,6 +10,13 @@ Work from repository evidence and live-device observations. Read
 before changing bootstrap paths, package-manager state, root-spawn, or removal
 logic.
 
+## Current Verified Baseline
+
+- `3.0.29` is `DEVICE VERIFIED` on iPhone XS Max running iOS 18.2.1 as of 2026-08-22. User-confirmed reboot-cycle tests no longer reproduce activation-time automatic reboot, abnormal two-to-three-minute black screens, or severe post-activation lag.
+- After a full device reboot and another activation, previously registered third-party dynamic trust-cache entries are restored and apps injected by TrollFools and equivalent RootHide API clients launch normally.
+- Keep this result scoped to the tested device and OS. Other hardware and iOS versions still require independent device validation.
+- A CDHash that never reached the persistent registry cannot be reconstructed from an App container. Seed that file once through its original tool before testing reboot persistence.
+
 ## Safety Boundaries
 
 - Treat device filesystem deletion, reboot, userspace reboot, and system-service termination as separate destructive actions. Do not perform them without explicit authorization for that action.

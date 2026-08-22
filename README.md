@@ -9,6 +9,29 @@ Maintenance notes and device-safe validation procedures are in
 The repository-local Codex workflow is in
 [`skills/dopamine-roothide-maintainer/SKILL.md`](skills/dopamine-roothide-maintainer/SKILL.md).
 
+## AI maintenance handoff
+
+The repository copies are the portable source of truth. A new computer, AI
+coding agent, or session must not depend on an earlier local skill install,
+conversation, or memory export. Start the agent at the repository root on the
+`roothide-3.x` branch and give it this instruction:
+
+```text
+Before working on Dopamine3-RootHide, read
+skills/dopamine-roothide-maintainer/SKILL.md completely, then read
+docs/ROOTHIDE_DOPAMINE_MAINTENANCE.md completely. Follow their safety
+boundaries and verified baselines. Treat the repository copies as
+authoritative and update them when a device result changes.
+```
+
+If the agent supports installable skills, the repository-local skill may be
+installed or linked into that agent's skill directory, but the checked-in
+[`SKILL.md`](skills/dopamine-roothide-maintainer/SKILL.md) remains canonical.
+Before editing, the agent must inspect the worktree, preserve unrelated user
+changes and the untracked `$d/` directory, and obtain explicit authorization
+before rebooting, performing a userspace reboot or respring, terminating a
+system service, or deleting device files.
+
 This project is experimental. Back up important data before testing, and
 remove incompatible tweaks if SpringBoard enters a respring loop.
 
@@ -24,10 +47,11 @@ in-app update screen reads release notes from the same location.
 - iOS 18.2.1 (22C161)
 - Dopamine 3.0.7 base
 
-The RootHide behavior carried by this branch has a device-verified historical
-baseline, but builds from this repository remain unverified until each commit
-has completed a fresh device test. A successful GitHub Actions build only
-establishes that the source compiles and packages correctly.
+The 3.0.29 artifact is `DEVICE VERIFIED` on this target, including activation
+stability and third-party dynamic trust-cache restoration across a full reboot.
+Later source commits remain unverified until they complete a fresh device test.
+A successful GitHub Actions build only establishes that the source compiles and
+packages correctly.
 
 ## Community
 

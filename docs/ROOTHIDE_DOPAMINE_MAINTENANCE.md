@@ -14,7 +14,7 @@
 | 3.0.26 | A5：weak-only pin，并修复 PTE/full-map 后端分派 | 设备可正常月余，自动重启显著减少；运行约 3 小时 13 分后出现新的 launchd trust-cache/IOSurface 路径 SIGEMT，不能关闭稳定性问题 |
 | 3.0.27 | B1：修复 launchd trust-cache 并发、去重和跨页写入 | 真机仍发生 IOSurface 生命周期 panic，不能使用 |
 | 3.0.28 | C1：通用动态 trust-cache 注册表 | 真机注册表有效，但主按钮路径未恢复；月余时可自动重启或长时间黑屏卡顿，不能使用 |
-| 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | GitHub Actions 全量构建通过；设备安装与完整重启周期仍待验证 |
+| 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | `DEVICE VERIFIED`：月余稳定，完整重启后第三方动态 trust-cache 可恢复，既有注入 App 正常启动 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -864,12 +864,23 @@ artifact id: 9472776011
 artifact: roothide-Dopamine-3.0.29-045faeb.tipa
 artifact ZIP SHA-256: 4d3255ad5ad6b083678ba77fcc3f2bb30f1806dcd8b7d4a2d8788f5b537d4b1b
 TIPA SHA-256: 903bd021789ab9920edc40be92ead8fff020dd2402bf7582e63f22fe3591c64e
-status: STATICALLY VERIFIED; device installation and reboot-cycle validation pending
+status: DEVICE VERIFIED (2026-08-22)
 ```
 
-独立产物核验：TIPA 含 131 项、`basebin.tar` 含 31 项，ZIP CRC 与路径安全检查通过；App/basebin 版本均为 3.0.29，`.build` 与 commit 一致；`libjailbreak.dylib`、`jbctl`、`launchdhook.dylib`、`systemhook.dylib` 均含 arm64 与 arm64e；五个运行时标记全部存在。该结果不等价于真机稳定性验证。
+独立产物核验：TIPA 含 131 项、`basebin.tar` 含 31 项，ZIP CRC 与路径安全检查通过；App/basebin 版本均为 3.0.29，`.build` 与 commit 一致；`libjailbreak.dylib`、`jbctl`、`launchdhook.dylib`、`systemhook.dylib` 均含 arm64 与 arm64e；五个运行时标记全部存在。该静态核验随后已由下述真机完整重启周期验证补全。
 
-### 3.0.29 验证要求
+### 3.0.29 真机验证结果
+
+2026-08-22，用户确认 3.0.29 在 iPhone XS Max、iOS 18.2.1 基线上通过真机验证：
+
+- 月余流程正常完成，不再中途触发手机自动重启。
+- 不再出现代码完成后黑屏两三分钟才进入桌面或进入桌面后系统严重卡顿。
+- 手机完整重启并重新月余后，已登记的第三方动态 trust-cache 条目能够恢复。
+- TrollFools 等工具先前注入的 App 可正常启动，Loader、插件与 CydiaSubstrate 等依赖不再因 CDHash 丢失而被 AMFI 拒绝映射。
+
+因此 3.0.29 可在该设备与系统版本范围内标记为 `DEVICE VERIFIED`。其他硬件和 iOS 版本仍需独立验证；从未进入持久注册表的历史 CDHash 仍需由原工具成功登记一次，不能从 App 容器自动推导。
+
+### 3.0.29 持续回归要求
 
 1. 构建产物必须包含 3.0.29、arm64/arm64e 切片及 `UCRED-SMR-18A5`、`TRUSTCACHE-KALLOC-18B2`、`TRUSTCACHE-PERSIST-18C1`、`TRUSTCACHE-PERSIST-18D1`、`RESPRING-IOS18-BBD1`。
 2. 覆盖安装前记录注册表和 live cache。安装后先让 Telegram 对应工具及至少一个其他 RootHide 动态信任调用方成功登记一次；必须先证明目标 CDHash 已进入注册表。
