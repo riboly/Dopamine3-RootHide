@@ -669,12 +669,12 @@ static void RHInstallFridaFromURL(NSURL *url)
                 [removeJailbreakSwitchSpecifier setProperty:@"removeJailbreakEnabled" forKey:@"key"];
                 [specifiers addObject:removeJailbreakSwitchSpecifier];
             }
-            
-            if (envManager.isJailbroken || (envManager.isInstalledThroughTrollStore && envManager.isBootstrapped)) {
+
+            if (envManager.isBootstrapped) {
                 PSSpecifier *actionsGroupSpecifier = [PSSpecifier emptyGroupSpecifier];
                 actionsGroupSpecifier.name = DOLocalizedString(@"Section_Actions");
                 [specifiers addObject:actionsGroupSpecifier];
-                
+
                 if (envManager.isJailbroken) {
                     PSSpecifier *refreshAppsSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
                     [refreshAppsSpecifier setProperty:@"Button_Refresh_Jailbreak_Apps" forKey:@"title"];
@@ -742,54 +742,23 @@ static void RHInstallFridaFromURL(NSURL *url)
                     [manageMountsSpecifier setProperty:@"externaldrive" forKey:@"image"];
                     [manageMountsSpecifier setProperty:@"manageMountsPressed" forKey:@"action"];
                     [specifiers addObject:manageMountsSpecifier];
+                    PSSpecifier *removeTrollStoreSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
+                    [removeTrollStoreSpecifier setProperty:@"Button_Remove_TrollStore_Environment" forKey:@"title"];
+                    [removeTrollStoreSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
+                    [removeTrollStoreSpecifier setProperty:buttonHeight forKey:@"height"];
+                    [removeTrollStoreSpecifier setProperty:@"externaldrive.badge.xmark" forKey:@"image"];
+                    [removeTrollStoreSpecifier setProperty:@"removeTrollStoreEnvironmentPressed" forKey:@"action"];
+                    [specifiers addObject:removeTrollStoreSpecifier];
                 }
-                if ((envManager.isJailbroken || envManager.isInstalledThroughTrollStore) && envManager.isBootstrapped) {
-/*
-                    PSSpecifier *hideUnhideJailbreakSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
-                    [hideUnhideJailbreakSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
-                    [hideUnhideJailbreakSpecifier setProperty:buttonHeight forKey:@"height"];
-                    if (envManager.isJailbreakHidden) {
-                        [hideUnhideJailbreakSpecifier setProperty:@"Button_Unhide_Jailbreak" forKey:@"title"];
-                        [hideUnhideJailbreakSpecifier setProperty:@"eye" forKey:@"image"];
-                    }
-                    else {
-                        [hideUnhideJailbreakSpecifier setProperty:@"Button_Hide_Jailbreak" forKey:@"title"];
-                        [hideUnhideJailbreakSpecifier setProperty:@"eye.slash" forKey:@"image"];
-                    }
-                    [hideUnhideJailbreakSpecifier setProperty:@"hideUnhideJailbreakPressed" forKey:@"action"];
-                    BOOL hideJailbreakButtonShown = (envManager.isJailbroken || (envManager.isInstalledThroughTrollStore && envManager.isBootstrapped && !envManager.isJailbreakHidden));
-                    if (hideJailbreakButtonShown) {
-                        [specifiers addObject:hideUnhideJailbreakSpecifier];
-                    }
-*/
-                    
+
+                if (!envManager.isJailbroken && envManager.isInstalledThroughTrollStore) {
                     PSSpecifier *removeJailbreakSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
                     [removeJailbreakSpecifier setProperty:@"Button_Remove_Jailbreak" forKey:@"title"];
                     [removeJailbreakSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
                     [removeJailbreakSpecifier setProperty:buttonHeight forKey:@"height"];
                     [removeJailbreakSpecifier setProperty:@"trash" forKey:@"image"];
                     [removeJailbreakSpecifier setProperty:@"removeJailbreakPressed" forKey:@"action"];
-/*
-                    if (hideJailbreakButtonShown) {
-                        if (envManager.isJailbroken) {
-                            [removeJailbreakSpecifier setProperty:DOLocalizedString(@"Hint_Hide_Jailbreak_Jailbroken") forKey:@"footerText"];
-                        }
-                        else {
-                            [removeJailbreakSpecifier setProperty:DOLocalizedString(@"Hint_Hide_Jailbreak") forKey:@"footerText"];
-                        }
-                    }
-*/
                     [specifiers addObject:removeJailbreakSpecifier];
-
-                    if (envManager.isJailbroken) {
-                        PSSpecifier *removeTrollStoreSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
-                        [removeTrollStoreSpecifier setProperty:@"Button_Remove_TrollStore_Environment" forKey:@"title"];
-                        [removeTrollStoreSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
-                        [removeTrollStoreSpecifier setProperty:buttonHeight forKey:@"height"];
-                        [removeTrollStoreSpecifier setProperty:@"externaldrive.badge.xmark" forKey:@"image"];
-                        [removeTrollStoreSpecifier setProperty:@"removeTrollStoreEnvironmentPressed" forKey:@"action"];
-                        [specifiers addObject:removeTrollStoreSpecifier];
-                    }
                 }
             }
         }
