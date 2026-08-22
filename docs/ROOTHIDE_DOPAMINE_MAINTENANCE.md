@@ -798,3 +798,18 @@ RESPRING-IOS18-BBD1
 4. 直接启动先前注入的 App，确认 Loader、插件和依赖可映射；同时检查 `TRUSTCACHE-PERSIST-18C1` 恢复日志。
 5. 显式执行 `trustcache clear` 的破坏性回归必须另行授权；若执行，应确认当前动态页与持久注册表同时清空，下一次激活不会恢复旧条目。
 6. 构建成功、注册表生成或单次 App 启动均不能单独宣布修复完成，必须通过完整重启周期。
+
+### 3.0.28 构建记录
+
+GitHub Actions 全量构建：
+
+```text
+run: 32555605294
+source commit: af268932da9299c76f9b01e62d1ca4cafdd57fe5
+artifact id: 9471335544
+artifact: roothide-Dopamine-3.0.28-af26893.tipa
+artifact ZIP SHA-256: d2c10a0aafc2c945f46dc41ff2d9f9fdd0fea6d9dbcb5ca68f4cece9079e4295
+TIPA SHA-256: 24fec01c397673b0f05911f8a4c0e1663a57138d78b20b35df832cfde4fcd709
+```
+
+独立核验结果：外层 artifact ZIP 与 GitHub digest 完全一致；TIPA 含 131 项、内嵌 `basebin.tar` 含 31 项，均无不安全路径；App 标识为 `com.opa334.Dopamine-roothide`，版本为 3.0.28；内嵌 `.version` 为 3.0.28，`.build` 与 source commit 一致；部署用 `libjailbreak.dylib`、`jbctl`、`systemhook.dylib` 均含 arm64 与 arm64e；`UCRED-SMR-18A5`、`TRUSTCACHE-IOSURFACE-18B1`、`TRUSTCACHE-PERSIST-18C1`、`RESPRING-IOS18-BBD1` 均存在于对应最终 Mach-O。当前状态为静态与构建验证通过，设备安装、注册表生成和完整重启恢复仍未验证。
