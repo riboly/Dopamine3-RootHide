@@ -1,6 +1,7 @@
 #import "LSApplicationProxy.h"
 @interface LSApplicationWorkspace : NSObject
 + (instancetype)defaultWorkspace;
+- (NSArray<LSApplicationProxy *> *)allApplications;
 - (BOOL)registerApplicationDictionary:(NSDictionary*)dict;
 - (BOOL)unregisterApplication:(id)arg1;
 - (BOOL)_LSPrivateRebuildApplicationDatabasesForSystemApps:(BOOL)arg1 internal:(BOOL)arg2 user:(BOOL)arg3;
