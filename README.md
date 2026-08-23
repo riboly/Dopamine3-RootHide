@@ -45,7 +45,7 @@ in-app update screen reads release notes from the same location.
 
 - iPhone XS Max (iPhone11,6, A12)
 - iOS 18.2.1 (22C161)
-- Dopamine 3.0.9 base
+- Dopamine 3.0.9 applicable upstream update set
 
 The 3.0.29 artifact is `DEVICE VERIFIED` on this target for activation and
 third-party dynamic trust-cache restoration across a full reboot. A separate
