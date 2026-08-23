@@ -15,6 +15,7 @@
 | 3.0.27 | B1：修复 launchd trust-cache 并发、去重和跨页写入 | 真机仍发生 IOSurface 生命周期 panic，不能使用 |
 | 3.0.28 | C1：通用动态 trust-cache 注册表 | 真机注册表有效，但主按钮路径未恢复；月余时可自动重启或长时间黑屏卡顿，不能使用 |
 | 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | `DEVICE VERIFIED`：月余稳定，完整重启后第三方动态 trust-cache 可恢复，既有注入 App 正常启动 |
+| 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | 源码候选；静态、构建与真机长时验证待完成 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -888,3 +889,60 @@ status: DEVICE VERIFIED (2026-08-22)
 4. 经用户单独授权后执行完整重启并重新月余。在启动 TrollFools、目标 App 或其他登记工具之前，检查目标 CDHash 已经恢复到 live dynamic trust cache，并核对 `TRUSTCACHE-PERSIST-18D1` 成功日志。
 5. 直接启动先前注入的 App，确认 Loader、插件和依赖均可映射；继续观察是否出现 IOSurface `pmap_tt_deallocate`、月余中途自动重启、异常长黑屏或系统卡顿。
 6. 构建成功只能标记为静态验证；只有上述完整重启周期和持续稳定性观察均通过，才能标记为设备修复完成。
+
+## 20. 3.0.30：Sandbox kerncred panic 与上游 3.0.9 同步
+
+### 3.0.29 长时结果与 panic 定位
+
+用户确认 3.0.29 的月余、第三方动态 trust-cache 恢复和注入 App 启动均持续正常；十几个小时期间仅发生一次完整重启。对应日志为 `panic-full-2026-08-23-034328.0002.ips`，关键证据：
+
+```text
+panic: "shenanigans!" @evaluate.c:6421
+Panicked task: pid 5730: Dopamine
+Kernel Extensions in backtrace: com.apple.security.sandbox
+device: iPhone11,6 / iOS 18.2.1 (22C161) / XNU 11215.62.3
+```
+
+该 panic 不是 trust-cache、IOSurface、旧 `ucred` SMR 或 OOM 回归。系统当时已运行约 5.9 小时，但 Dopamine 进程只运行约 0.35 秒。panic 中 Dopamine UUID `20bd484b-0fe1-3f73-9b46-5aebe86ef1b1` 与 3.0.29 TIPA 完全一致；用户帧偏移 `0x34B94` 符号化为 `_main + 0x294`，位于 `UIApplicationMain()` 返回地址，因此故障发生在 App 启动/UIKit 初始化期间，不是点击月余按钮后的执行路径。
+
+公开 patchfinder 对 `shenanigans!` 的定位同时查找 `sb_evaluate` 与 `_is_kernel_cred_kerncred`。RootHide 的确定性调用链为：
+
+```text
+Dopamine 启动并查询 jailbrokenVersion
+-> runAsRoot
+-> runUnsandboxed
+-> /private/var/root 探测受沙盒拒绝
+-> jbclient_root_steal_ucred(0)
+-> GUI App 临时换成 kernproc 的完整 credential
+-> NSString 文件访问进入 sb_evaluate
+-> panic("shenanigans!")
+```
+
+`BaseBin/launchdhook/src/jbserver/jbdomain_root.c` 明确规定 `ucred == 0` 表示 `kern_ucred`。因此这是 Sandbox 对普通 GUI 进程持有完整 kerncred 的主动一致性检查，不是随机内存损坏。
+
+### E1 修复
+
+- `DOEnvironmentManager.runUnsandboxed` 在 iOS 17+ 已月余状态下刷新并使用 RootHide process check-in 签发的 sandbox extensions，随后直接执行 RootHide 路径内操作。
+- iOS 17+ 无论 extension 刷新是否成功，都禁止回退到 `jbclient_root_steal_ucred(0)`；刷新错误记录 `SANDBOX-KERNCRED-18E1`，具体文件操作按真实权限返回失败，而不是以内核身份冒险继续。
+- 首次激活的 pinned root/unsandbox identity 保持不变；iOS 16 及以下保留旧兼容路径。
+- 已审计全部 `runUnsandboxed` 调用。普通读取、包管理器、boot logo、fake mount 配置和 bootstrap 文件均位于 RootHide 签发的读写/执行路径；超出该范围的特权命令继续由 `jbctl`/root helper 承担。
+- 该修复是通用边界修复，不只针对 `jailbrokenVersion`，避免其他 GUI 调用方再次借用 kerncred。
+
+### 上游 3.0.9 移植
+
+本分支与上游共同祖先为 Dopamine 3.0.7 (`38f324012407088b00e1c3530c967e00c2310315`)，上游 3.0.9 tag 为 `470251e5d77dc20869b98d0d5454247b7badd1bf`。3.0.30 移植以下适用变更：
+
+- iOS 18.0 起，移除月余前通过新增 `jbctl rebuild_icon_cache` 重建 LaunchServices 图标数据库。
+- 新增 `com.apple.lsapplicationworkspace.rebuildappdatabases` entitlement 和 `LSApplicationWorkspace` 私有声明，同时保留 RootHide 的 TrollStore 安全卸载接口。
+- 设置页只在未月余且通过 TrollStore 安装时显示“移除月余”，避免已月余状态下直接删除 bootstrap；RootHide 专有“移除巨魔环境”仍只在已月余状态显示。
+- 合并上游 `Rebuilding Icon Cache` 本地化更新。
+- 上游“删除多余 sleep”在本分支已等效存在；“隐藏月余”说明改动不适用于 RootHide 当前明确禁用的隐藏按钮，且会把现有翻译降级为占位符，因此不移植。
+- 上游 3.0.8/3.0.9 版本元数据不直接覆盖 RootHide 版本；`Application/Makefile` 与 basebin `.version` 同步升为 3.0.30。
+
+### 3.0.30 验证要求
+
+1. `git diff --check`、完整冲突标记扫描和 RootHide 专有差异审计必须通过。
+2. Actions TIPA 必须同时报告 App/basebin 3.0.30，包含 arm64/arm64e，并在 Dopamine 可执行文件中找到 `SANDBOX-KERNCRED-18E1`。
+3. 覆盖安装后反复冷启动 Dopamine，确认版本读取、设置页和 RootHide 工具操作正常，且不出现 `shenanigans!` panic。
+4. 经用户单独授权后完成月余、完整重启、重新月余和第三方 trust-cache 恢复回归；先核对注册表/live cache，再启动注入 App。
+5. 长时观察至少覆盖 3.0.29 已出现故障的十几个小时窗口。构建通过不等于设备修复完成，只有该窗口内无 Sandbox panic 且既有功能全部正常，3.0.30 才能标记为 `DEVICE VERIFIED`。

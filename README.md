@@ -45,12 +45,15 @@ in-app update screen reads release notes from the same location.
 
 - iPhone XS Max (iPhone11,6, A12)
 - iOS 18.2.1 (22C161)
-- Dopamine 3.0.7 base
+- Dopamine 3.0.9 base
 
-The 3.0.29 artifact is `DEVICE VERIFIED` on this target, including activation
-stability and third-party dynamic trust-cache restoration across a full reboot.
-Later source commits remain unverified until they complete a fresh device test.
-A successful GitHub Actions build only establishes that the source compiles and
+The 3.0.29 artifact is `DEVICE VERIFIED` on this target for activation and
+third-party dynamic trust-cache restoration across a full reboot. A separate
+long-running test later exposed one Sandbox `shenanigans!` panic while opening
+the Dopamine app. Version 3.0.30 updates the fork to the Dopamine 3.0.9 codebase
+and removes the iOS 17+ GUI kerncred fallback responsible for that panic. It
+remains device-unverified until it completes a fresh long-running test. A
+successful GitHub Actions build only establishes that the source compiles and
 packages correctly.
 
 ## Community
