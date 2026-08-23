@@ -52,9 +52,10 @@ third-party dynamic trust-cache restoration across a full reboot. A separate
 long-running test later exposed one Sandbox `shenanigans!` panic while opening
 the Dopamine app. Version 3.0.30 updates the fork to the Dopamine 3.0.9 codebase
 and removes the iOS 17+ GUI kerncred fallback responsible for that panic. It
-remains device-unverified until it completes a fresh long-running test. A
-successful GitHub Actions build only establishes that the source compiles and
-packages correctly.
+has passed source, Actions build, and artifact verification, but remains
+device-unverified until it completes a fresh long-running test. A successful
+GitHub Actions build only establishes that the source compiles and packages
+correctly.
 
 ## Community
 

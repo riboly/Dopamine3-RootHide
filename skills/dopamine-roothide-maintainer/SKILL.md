@@ -14,7 +14,7 @@ logic.
 
 - `3.0.29` is `DEVICE VERIFIED` on iPhone XS Max running iOS 18.2.1 as of 2026-08-22 for activation and trust-cache persistence. User-confirmed reboot-cycle tests no longer reproduce activation-time automatic reboot, abnormal two-to-three-minute black screens, or severe post-activation lag.
 - After a full device reboot and another activation, previously registered third-party dynamic trust-cache entries are restored and apps injected by TrollFools and equivalent RootHide API clients launch normally.
-- A later test ran normally for more than ten hours before one independent Sandbox `shenanigans!` panic occurred while the Dopamine GUI was starting. `3.0.30` removes that iOS 17+ GUI kerncred fallback and ports the applicable Dopamine 3.0.9 changes, but is not device verified yet.
+- A later test ran normally for more than ten hours before one independent Sandbox `shenanigans!` panic occurred while the Dopamine GUI was starting. `3.0.30` removes that iOS 17+ GUI kerncred fallback and ports the applicable Dopamine 3.0.9 changes. Actions run `32615153841` and the downloaded artifact are verified, but the build is not device verified yet.
 - Keep this result scoped to the tested device and OS. Other hardware and iOS versions still require independent device validation.
 - A CDHash that never reached the persistent registry cannot be reconstructed from an App container. Seed that file once through its original tool before testing reboot persistence.
 

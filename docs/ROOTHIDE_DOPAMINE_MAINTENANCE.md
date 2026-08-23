@@ -15,7 +15,7 @@
 | 3.0.27 | B1：修复 launchd trust-cache 并发、去重和跨页写入 | 真机仍发生 IOSurface 生命周期 panic，不能使用 |
 | 3.0.28 | C1：通用动态 trust-cache 注册表 | 真机注册表有效，但主按钮路径未恢复；月余时可自动重启或长时间黑屏卡顿，不能使用 |
 | 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | `DEVICE VERIFIED`：月余稳定，完整重启后第三方动态 trust-cache 可恢复，既有注入 App 正常启动 |
-| 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | 源码候选；静态、构建与真机长时验证待完成 |
+| 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | 静态、Actions 构建与产物核验通过；真机长时验证待完成 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -938,6 +938,22 @@ Dopamine 启动并查询 jailbrokenVersion
 - 合并上游 `Rebuilding Icon Cache` 本地化更新。
 - 上游“删除多余 sleep”在本分支已等效存在；“隐藏月余”说明改动不适用于 RootHide 当前明确禁用的隐藏按钮，且会把现有翻译降级为占位符，因此不移植。
 - 上游 3.0.8/3.0.9 版本元数据不直接覆盖 RootHide 版本；`Application/Makefile` 与 basebin `.version` 同步升为 3.0.30。
+
+### 3.0.30 构建记录
+
+```text
+commit: ccce12145ee103984822ccc4c6411d34bd4e6906
+workflow run: 32615153841
+workflow URL: https://github.com/riboly/Dopamine3-RootHide/actions/runs/32615153841
+artifact id: 9486721771
+artifact: roothide-Dopamine-3.0.30-ccce121.tipa
+artifact ZIP SHA-256: f520b8c1c449f2927a47bdeb512f20d1d880a28bac04530a0a616f713d010151
+TIPA SHA-256: b5ea8f4ec5da96b03e28875750e70644f3b75d13f8eef75de7405c3c6f0683ec
+basebin.tar SHA-256: 24788a6a50faf98f9af54a87146fc39b60d62502aef818c1ccb47b826119a178
+status: BUILD VERIFIED / DEVICE UNVERIFIED
+```
+
+GitHub API 报告的 artifact 大小为 54,532,291 字节，SHA-256 与下载 ZIP 完全一致。TIPA 含 131 项、内嵌 `basebin.tar` 含 31 项，ZIP CRC 与两层路径安全检查通过；App 标识为 `com.opa334.Dopamine-roothide`，App/basebin 版本均为 3.0.30，`.build` 与 source commit 一致。`libjailbreak.dylib`、`jbctl`、`launchdhook.dylib`、`systemhook.dylib` 均含 arm64 与 arm64e；最终产物包含 `SANDBOX-KERNCRED-18E1`、`UCRED-SMR-18A5`、`TRUSTCACHE-KALLOC-18B2`、`TRUSTCACHE-PERSIST-18C1`、`TRUSTCACHE-PERSIST-18D1` 和 `RESPRING-IOS18-BBD1`。TIPA 已保存为 `D:\LocalSend\roothide-Dopamine-3.0.30-ccce121.tipa`。
 
 ### 3.0.30 验证要求
 
