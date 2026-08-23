@@ -14,6 +14,7 @@
 #import <sys/stat.h>
 #import <sys/wait.h>
 #import <errno.h>
+#import <string.h>
 #import <unistd.h>
 #import <mach-o/dyld.h>
 #import <libgrabkernel2/libgrabkernel2.h>
@@ -335,6 +336,20 @@ extern char **environ;
         unsandboxBlock();
     }
     else if([self isJailbroken]) {
+        if (@available(iOS 17.0, *)) {
+            // RootHide check-in grants this GUI process access to the active
+            // bootstrap. Borrowing kernproc's complete credential here can
+            // make sandbox evaluation panic with "shenanigans!" on iOS 17+.
+            int consumedExtensionCount = 0;
+            int permissionResult = jbclient_process_checkin_consume_sandbox_extensions(&consumedExtensionCount);
+            if (permissionResult != 0) {
+                NSLog(@"SANDBOX-KERNCRED-18E1: RootHide sandbox extension refresh failed: %d (%s), consumed=%d",
+                      permissionResult, strerror(permissionResult), consumedExtensionCount);
+            }
+            unsandboxBlock();
+            return;
+        }
+
         uint64_t credentialBackup = 0;
         int borrowResult = jbclient_root_steal_ucred(0, &credentialBackup);
         if (borrowResult != 0) {
