@@ -53,9 +53,11 @@ normally, with no automatic reboot during the reported test window. Version
 3.0.31 reduces active-use overhead by excluding three verified high-frequency
 Apple services from iOS 18 systemhook injection, caching Jetsam settings for
 five seconds, and changing the 4 GB device default from 3x to 1.5x. It remains
-device-unverified until its Actions build and live performance/function tests
-complete. A successful GitHub Actions build only establishes that the source
-compiles and packages correctly.
+device-unverified, but Actions run `32688829154` and the downloaded 3.0.31
+artifact have passed build, integrity, version, architecture, and runtime-marker
+verification. Live performance and full function tests still remain. A
+successful GitHub Actions build only establishes that the source compiles and
+packages correctly.
 
 
 

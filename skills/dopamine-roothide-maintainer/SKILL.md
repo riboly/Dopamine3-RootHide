@@ -14,7 +14,7 @@ logic.
 
 - `3.0.30` is `DEVICE VERIFIED` on iPhone XS Max running iOS 18.2.1 as of 2026-08-24. All tested functionality is normal, no automatic reboot occurred, and the earlier Dopamine GUI Sandbox `shenanigans!` panic did not recur.
 - After a full device reboot and another activation, previously registered third-party dynamic trust-cache entries are restored and apps injected by TrollFools and equivalent RootHide API clients launch normally.
-- `3.0.31` narrows iOS 18 injection for three verified high-frequency Apple services, caches Jetsam settings for five seconds, and changes the safe default from 3x to 1.5x. It remains device-unverified until its build and live regression tests complete.
+- `3.0.31` narrows iOS 18 injection for three verified high-frequency Apple services, caches Jetsam settings for five seconds, and changes the safe default from 3x to 1.5x. Actions run `32688829154` and artifact `roothide-Dopamine-3.0.31-b3ef580.tipa` are `BUILD VERIFIED`; live performance and full functional regression remain pending.
 - The remaining 3.0.30 issue is active-use heat and UI jank, not standby heat. USB desktop polling is a separate measurable contributor and must be controlled during comparisons.
 - Keep this result scoped to the tested device and OS. Other hardware and iOS versions still require independent device validation.
 - A CDHash that never reached the persistent registry cannot be reconstructed from an App container. Seed that file once through its original tool before testing reboot persistence.

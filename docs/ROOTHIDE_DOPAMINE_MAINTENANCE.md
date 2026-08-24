@@ -16,7 +16,7 @@
 | 3.0.28 | C1：通用动态 trust-cache 注册表 | 真机注册表有效，但主按钮路径未恢复；月余时可自动重启或长时间黑屏卡顿，不能使用 |
 | 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | `DEVICE VERIFIED`：月余稳定，完整重启后第三方动态 trust-cache 可恢复，既有注入 App 正常启动 |
 | 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | `DEVICE VERIFIED`：全部功能正常，未再发生自动重启；待机温度正常，但亮屏交互时仍有发热与掉帧 |
-| 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | 源码实现完成；Actions 构建与真机验证待完成 |
+| 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | `BUILD VERIFIED / DEVICE UNVERIFIED`：Actions 与产物核验通过，待真机性能和完整功能回归 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -1007,3 +1007,21 @@ GitHub API 报告的 artifact 大小为 54,532,291 字节，SHA-256 与下载 ZI
 4. 通过进程镜像或运行时日志确认三条完整路径不再加载 systemhook/RootHide/TweakLoader；普通 App、第三方扩展、包管理器和 RootHide 工具仍正常注入。
 5. 对比 3.0.30 的相同亮屏场景，采样 `nanotimekitcompaniond`、SpringBoard、backboardd、AccessibilityUIServer 的 CPU、设备温度与掉帧；同时分别记录 USB 连接和拔线状态。
 6. 经用户单独授权后完成月余、完整重启、重新月余和第三方动态 trust-cache 恢复回归。构建成功只能标记为 `BUILD VERIFIED`，不能代替真机性能与功能验证。
+
+### 3.0.31 构建记录
+
+```text
+source commit: b3ef58007a2e9798820ed4736f28772b0e03f3f9
+workflow run: 32688829154
+workflow URL: https://github.com/riboly/Dopamine3-RootHide/actions/runs/32688829154
+artifact id: 9506600755
+artifact: roothide-Dopamine-3.0.31-b3ef580.tipa
+artifact ZIP SHA-256: 5d83f903057da7ae42fd7343cda8570226888baf114b59536a64b286af1e8731
+TIPA SHA-256: 3686b866a248169a8cfd512357f3f5a5c3a133b8e8f6fb64aeda110f9189b92f
+basebin.tar SHA-256: 206bd3a39c49c0abae9d49fc4e02a458ee419d8eed1cd9c0b8fd8166315192ff
+status: BUILD VERIFIED / DEVICE UNVERIFIED
+```
+
+GitHub API 报告的 artifact ZIP 大小为 54,534,012 字节，下载文件的 SHA-256 与 API digest 完全一致。外层 artifact 仅含目标 TIPA，TIPA 含 131 项，内嵌 `basebin.tar` 含 31 项；两层归档的 CRC 和路径安全检查全部通过。App 标识为 `com.opa334.Dopamine-roothide`，App/basebin 版本均为 3.0.31，内嵌 `.build` 与 source commit 完全一致。
+
+Dopamine App 为 arm64；部署用 `libjailbreak.dylib`、`launchdhook.dylib`、`systemhook.dylib` 和 `jbctl` 均含 arm64 与 arm64e。最终产物继续包含 `SANDBOX-KERNCRED-18E1`、`UCRED-SMR-18A5`、`TRUSTCACHE-KALLOC-18B2`、`TRUSTCACHE-PERSIST-18C1`、`TRUSTCACHE-PERSIST-18D1`、`TRUSTFLOW-8A10`、`RESPRING-IOS18-BBD1`，并包含新增 `PERF-NOINJECT-IOS18-18F1`。TIPA 已保存为 `D:\LocalSend\roothide-Dopamine-3.0.31-b3ef580.tipa`。
