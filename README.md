@@ -57,10 +57,7 @@ device-unverified until it completes a fresh long-running test. A successful
 GitHub Actions build only establishes that the source compiles and packages
 correctly.
 
-## Community
 
-- Telegram: https://t.me/+WtnN67BeOsA1MGM5
-- RootHide developer documentation: https://github.com/roothide/Developer
 
 ## Building
 
