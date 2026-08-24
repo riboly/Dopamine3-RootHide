@@ -657,7 +657,7 @@ static void RHInstallFridaFromURL(NSURL *url)
             PSSpecifier *jetsamSpecifier = [PSSpecifier preferenceSpecifierNamed:DOLocalizedString(@"Settings_Jetsam_Multiplier") target:self set:@selector(setJetsamMultiplier:specifier:) get:@selector(readJetsamMultiplier:) detail:nil cell:PSLinkListCell edit:nil];
             [jetsamSpecifier setProperty:@YES forKey:@"enabled"];
             [jetsamSpecifier setProperty:@"jetsamMultiplier" forKey:@"key"];
-            [jetsamSpecifier setProperty:@6 forKey:@"default"];
+            [jetsamSpecifier setProperty:@3 forKey:@"default"];
             jetsamSpecifier.detailControllerClass = [DOPSJetsamListItemsController class];
             [jetsamSpecifier setProperty:@"jetsamOptionNumbers" forKey:@"valuesDataSource"];
             [jetsamSpecifier setProperty:@"jetsamOptionTitles" forKey:@"titlesDataSource"];
@@ -899,7 +899,7 @@ static void RHInstallFridaFromURL(NSURL *url)
     DOEnvironmentManager *envManager = [DOEnvironmentManager sharedManager];
     if (envManager.isJailbroken) {
         double v = jbclient_jbsettings_get_double("jetsamMultiplier");
-        return @((v < 1 || isnan(v)) ? 6 : ceil(v * 2));
+        return @((v < 1 || !isfinite(v)) ? 3 : ceil(v * 2));
     }
     return [self readPreferenceValue:specifier];
 }

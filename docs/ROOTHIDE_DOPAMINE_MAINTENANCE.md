@@ -15,7 +15,8 @@
 | 3.0.27 | B1：修复 launchd trust-cache 并发、去重和跨页写入 | 真机仍发生 IOSurface 生命周期 panic，不能使用 |
 | 3.0.28 | C1：通用动态 trust-cache 注册表 | 真机注册表有效，但主按钮路径未恢复；月余时可自动重启或长时间黑屏卡顿，不能使用 |
 | 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | `DEVICE VERIFIED`：月余稳定，完整重启后第三方动态 trust-cache 可恢复，既有注入 App 正常启动 |
-| 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | 静态、Actions 构建与产物核验通过；真机长时验证待完成 |
+| 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | `DEVICE VERIFIED`：全部功能正常，未再发生自动重启；待机温度正常，但亮屏交互时仍有发热与掉帧 |
+| 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | 源码实现完成；Actions 构建与真机验证待完成 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -962,3 +963,47 @@ GitHub API 报告的 artifact 大小为 54,532,291 字节，SHA-256 与下载 ZI
 3. 覆盖安装后反复冷启动 Dopamine，确认版本读取、设置页和 RootHide 工具操作正常，且不出现 `shenanigans!` panic。
 4. 经用户单独授权后完成月余、完整重启、重新月余和第三方 trust-cache 恢复回归；先核对注册表/live cache，再启动注入 App。
 5. 长时观察至少覆盖 3.0.29 已出现故障的十几个小时窗口。构建通过不等于设备修复完成，只有该窗口内无 Sandbox panic 且既有功能全部正常，3.0.30 才能标记为 `DEVICE VERIFIED`。
+
+### 3.0.30 真机验证结果
+
+2026-08-24，用户确认 3.0.30 在 iPhone XS Max、iOS 18.2.1 基线上全部功能正常，测试期间未发生自动重启。此前 3.0.29 出现的 Dopamine GUI `shenanigans!` panic 未再复现，月余与第三方动态 trust-cache 恢复功能也保持正常。因此 3.0.30 可在该设备与系统版本范围内标记为 `DEVICE VERIFIED`。
+
+该结果同时暴露了一个独立的性能问题：相对 rootless 环境，设备亮屏交互时发热、卡顿和掉帧较明显；待机时温度正常。该问题不应与 3.0.29/3.0.30 已解决的 trust-cache 和 credential 稳定性故障混为一谈。
+
+## 21. 3.0.31：iOS 18 systemhook 注入面与 Jetsam 开销优化
+
+### 现场诊断
+
+2026-08-24 对 3.0.30 真机进行了只读 SSH/Frida 采样。主要结论：
+
+- `nanotimekitcompaniond` 在约 20 小时内累计启动约 1878 次，通常每 10–11 秒正常退出并由 launchd 重启，`last exit code = 0`；亮屏时单核占用约 7%–9%。它只加载 RootHide 的 `systemhook`、`roothideinit.dylib`、`roothidepatch.dylib` 等基础模块，没有加载第三方 tweak。
+- 亮屏热点还包括 SpringBoard 约 7%–8%、backboardd 约 5%–6%、AccessibilityUIServer 约 5%；熄屏后 backboardd 约降到 0.4%，AccessibilityUIServer 热点消失，符合“待机不热、亮屏交互发热”的用户现象。
+- USB 连接电脑时，`mobile_house_arrest` 在 45 秒内启动 11 次；拔线后降为 0，launchd/backboardd 负载也下降。正常使用时应关闭爱思助手、iTunes、iMazing、AltServer 等持续轮询工具，或拔掉 USB。
+- 卸载 Trim 0.0.2 并 Respring 后 UI 热点没有改善，可排除为主因。卸载 AppData 1.4.7 后 SpringBoard 仅下降约 1%，属于次要影响。设备当前未安装这两个插件。
+- trust-cache、jailbreakd、日志风暴、Frida 和实时 swap 均不是本轮亮屏热点。`jbclient_jbsettings_get_double("jetsamMultiplier")` 返回 0，旧代码会回退为 3×；`dyld_patch_enabled` 为 false。
+
+真机只读检查确认 iOS 18.2.1 上三条系统可执行路径为：
+
+```text
+/System/Library/PrivateFrameworks/NanoTimeKit.framework/nanotimekitcompaniond
+/System/Library/Frameworks/Metal.framework/XPCServices/MTLCompilerService.xpc/MTLCompilerService
+/System/Library/Frameworks/AudioToolbox.framework/XPCServices/AudioConverterService.xpc/AudioConverterService
+```
+
+### F1 设计
+
+- `spawn_config_for_executable()` 在 iOS 18+ 只对上述三条完整 Apple 系统路径返回 0，同时跳过 systemhook 注入和无意义的动态 trust 处理。使用完整路径而非 basename，避免第三方同名二进制绕过 RootHide。
+- 不豁免 `extensionkitservice`。它可能承载第三方 App Extension，需要保留 RootHide 路径、信任和 tweak 注入能力；不扩大到未经真机证实的 Apple 服务。
+- 这三个服务在 spawn 阶段不再收到 `DYLD_INSERT_LIBRARIES`，因此后续 `roothideinit.dylib`、`roothidepatch.dylib` 和 TweakLoader 加载会自然消失，无需重构 RootHide 的全局初始化或影响 TrollFools、包管理器、root-spawn、路径虚拟化与第三方 trust-cache 持久恢复。
+- systemhook 内的 Jetsam multiplier 改为每进程 5 秒有界缓存。缓存值和时间戳使用原子读写，不持有跨 XPC 的锁；设置页变更最多约 5 秒生效，同时高频 spawn 不再每次同步查询 jailbreakd。
+- 缺省、0、非有限值或小于 1 的 Jetsam multiplier 统一回退到 1.5×。设置页默认从内部选项值 6（3×）改为 3（1.5×），首次月余配置也直接写入 1.5×；用户仍可在 1×–4×范围内手动调整。
+- 产物运行时标记为 `PERF-NOINJECT-IOS18-18F1`。版本在 `Application/Makefile` 与 `BaseBin/_external/basebin/.version` 同步推进为 3.0.31。
+
+### 3.0.31 验证要求
+
+1. `git diff --check`、冲突标记扫描和完整 diff 审查通过；focused/full Actions 均必须检查 `PERF-NOINJECT-IOS18-18F1`。
+2. TIPA 必须同时报告 App/basebin 3.0.31，关键 Mach-O 保留 arm64/arm64e，并继续包含所有 credential、trust-cache、Sandbox 与 respring 安全标记。
+3. 安装后确认设置页默认显示 1.5×，切换到其他倍率后不需重新月余即可在约 5 秒内影响后续 spawn。
+4. 通过进程镜像或运行时日志确认三条完整路径不再加载 systemhook/RootHide/TweakLoader；普通 App、第三方扩展、包管理器和 RootHide 工具仍正常注入。
+5. 对比 3.0.30 的相同亮屏场景，采样 `nanotimekitcompaniond`、SpringBoard、backboardd、AccessibilityUIServer 的 CPU、设备温度与掉帧；同时分别记录 USB 连接和拔线状态。
+6. 经用户单独授权后完成月余、完整重启、重新月余和第三方动态 trust-cache 恢复回归。构建成功只能标记为 `BUILD VERIFIED`，不能代替真机性能与功能验证。

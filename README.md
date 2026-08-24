@@ -47,15 +47,15 @@ in-app update screen reads release notes from the same location.
 - iOS 18.2.1 (22C161)
 - Dopamine 3.0.9 applicable upstream update set
 
-The 3.0.29 artifact is `DEVICE VERIFIED` on this target for activation and
-third-party dynamic trust-cache restoration across a full reboot. A separate
-long-running test later exposed one Sandbox `shenanigans!` panic while opening
-the Dopamine app. Version 3.0.30 updates the fork to the Dopamine 3.0.9 codebase
-and removes the iOS 17+ GUI kerncred fallback responsible for that panic. It
-has passed source, Actions build, and artifact verification, but remains
-device-unverified until it completes a fresh long-running test. A successful
-GitHub Actions build only establishes that the source compiles and packages
-correctly.
+Version 3.0.30 is `DEVICE VERIFIED` on this target: activation, third-party
+dynamic trust-cache restoration, injected apps, and the Dopamine GUI all work
+normally, with no automatic reboot during the reported test window. Version
+3.0.31 reduces active-use overhead by excluding three verified high-frequency
+Apple services from iOS 18 systemhook injection, caching Jetsam settings for
+five seconds, and changing the 4 GB device default from 3x to 1.5x. It remains
+device-unverified until its Actions build and live performance/function tests
+complete. A successful GitHub Actions build only establishes that the source
+compiles and packages correctly.
 
 
 

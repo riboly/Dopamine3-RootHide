@@ -6,17 +6,56 @@
 #include <grp.h>
 #include <limits.h>
 #include <mach-o/dyld.h>
+#include <math.h>
 #include <os/log.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
 #include <sys/sysctl.h>
+#include <time.h>
 #include <unistd.h>
 #include <libjailbreak/setid_donor.h>
 
 static const char kTrustFlowBuildMarker[] __attribute__((used)) = "TRUSTFLOW-8A10";
 static const char kIOS18RespringFixMarker[] __attribute__((used)) = "RESPRING-IOS18-BBD1";
+static const char kIOS18PerformanceMarker[] __attribute__((used)) = "PERF-NOINJECT-IOS18-18F1";
+
+static const double kDefaultJetsamMultiplier = 1.5;
+static const uint64_t kJetsamMultiplierCacheTTLNs = 5ULL * 1000ULL * 1000ULL * 1000ULL;
+static _Atomic double gCachedJetsamMultiplier = 1.5;
+static _Atomic uint64_t gJetsamMultiplierCacheTimestampNs = 0;
+
+static uint64_t monotonic_time_ns(void)
+{
+	struct timespec now = {};
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+	return ((uint64_t)now.tv_sec * 1000ULL * 1000ULL * 1000ULL) + (uint64_t)now.tv_nsec;
+}
+
+static double cached_jetsam_multiplier(void)
+{
+	uint64_t nowNs = monotonic_time_ns();
+	uint64_t cachedAtNs = atomic_load_explicit(&gJetsamMultiplierCacheTimestampNs, memory_order_acquire);
+	if (nowNs != 0 && cachedAtNs != 0 && nowNs >= cachedAtNs &&
+		(nowNs - cachedAtNs) < kJetsamMultiplierCacheTTLNs) {
+		return atomic_load_explicit(&gCachedJetsamMultiplier, memory_order_relaxed);
+	}
+
+	// Races at the five-second refresh boundary are harmless: each writer stores
+	// a complete scalar value, and all following spawns use the refreshed cache.
+	double refreshedValue = jbclient_jbsettings_get_double("jetsamMultiplier");
+	if (!isfinite(refreshedValue) || refreshedValue < 1) {
+		refreshedValue = kDefaultJetsamMultiplier;
+	}
+	uint64_t refreshedAtNs = monotonic_time_ns();
+
+	atomic_store_explicit(&gCachedJetsamMultiplier, refreshedValue, memory_order_relaxed);
+	atomic_store_explicit(&gJetsamMultiplierCacheTimestampNs, refreshedAtNs != 0 ? refreshedAtNs : nowNs, memory_order_release);
+
+	return refreshedValue;
+}
 
 static int terminate_backboardd(void)
 {
@@ -477,12 +516,12 @@ if (msSafeModeValue) {
 
 int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path, struct _posix_spawn_args_desc *desc, char *const argv[restrict], char * const envp[restrict])
 {
-	return roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, trust_executable_recurse_no_arch, jbclient_platform_set_process_debugged, jbclient_jbsettings_get_double("jetsamMultiplier"));
+	return roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, trust_executable_recurse_no_arch, jbclient_platform_set_process_debugged, cached_jetsam_multiplier());
 }
 
 int __posix_spawn_hook_with_filter(pid_t *restrict pid, const char *restrict path, char *const argv[restrict], char * const envp[restrict], struct _posix_spawn_args_desc *desc, int *ret)
 {
-	*ret = roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, trust_executable_recurse_no_arch, jbclient_platform_set_process_debugged, jbclient_jbsettings_get_double("jetsamMultiplier"));
+	*ret = roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, trust_executable_recurse_no_arch, jbclient_platform_set_process_debugged, cached_jetsam_multiplier());
 	return 1;
 }
 

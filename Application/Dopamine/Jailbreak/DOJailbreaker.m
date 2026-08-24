@@ -728,7 +728,8 @@ static void cancel_boomerang_server(struct boomerang_info *info, pthread_t threa
     if (*errOut) return;
     
     gSystemInfo.jailbreakSettings.markAppsAsDebugged = appJITEnabled;
-    gSystemInfo.jailbreakSettings.jetsamMultiplier = jetsamMultiplierOption ? (jetsamMultiplierOption.doubleValue / 2) : 0;
+    double jetsamMultiplier = jetsamMultiplierOption ? (jetsamMultiplierOption.doubleValue / 2) : 1.5;
+    gSystemInfo.jailbreakSettings.jetsamMultiplier = (jetsamMultiplier < 1 || !isfinite(jetsamMultiplier)) ? 1.5 : jetsamMultiplier;
     
     
 /****************** roothide specific ****************/

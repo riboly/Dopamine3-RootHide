@@ -14,6 +14,7 @@
 #include "private.h"
 #include <libjailbreak/jbclient_xpc.h>
 #include <libjailbreak/jbserver_domains.h>
+#include <math.h>
 
 bool string_has_prefix(const char *str, const char* prefix)
 {
@@ -62,6 +63,17 @@ void string_enumerate_components(const char *string, const char *separator, void
 
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
+	if (__builtin_available(iOS 18.0, *)) {
+		const char *stockTransientServicePaths[] = {
+			"/System/Library/PrivateFrameworks/NanoTimeKit.framework/nanotimekitcompaniond",
+			"/System/Library/Frameworks/Metal.framework/XPCServices/MTLCompilerService.xpc/MTLCompilerService",
+			"/System/Library/Frameworks/AudioToolbox.framework/XPCServices/AudioConverterService.xpc/AudioConverterService",
+		};
+		for (size_t i = 0; i < sizeof(stockTransientServicePaths) / sizeof(stockTransientServicePaths[0]); i++) {
+			if (!strcmp(stockTransientServicePaths[i], path)) return 0;
+		}
+	}
+
 	// Blacklist to ensure general system stability
 	// I don't like this but for some processes it seems neccessary
 	const char *processBlacklist[] = {
@@ -176,7 +188,7 @@ static int spawn_exec_hook_common(const char *path,
 	if (shouldInsertJBEnv) {
 		uint8_t *attrStruct = (uint8_t *)attr;
 		if (attrStruct) {
-			if (jetsamMultiplier == 0 || isnan(jetsamMultiplier)) jetsamMultiplier = 3; // default value (3x)
+			if (!isfinite(jetsamMultiplier) || jetsamMultiplier < 1) jetsamMultiplier = 1.5; // default value (1.5x)
 			if (jetsamMultiplier > 1) {
 				int memlimit_active = *(int*)(attrStruct + POSIX_SPAWNATTR_OFF_MEMLIMIT_ACTIVE);
 				if (memlimit_active != -1) {

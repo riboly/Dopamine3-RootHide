@@ -12,9 +12,10 @@ logic.
 
 ## Current Verified Baseline
 
-- `3.0.29` is `DEVICE VERIFIED` on iPhone XS Max running iOS 18.2.1 as of 2026-08-22 for activation and trust-cache persistence. User-confirmed reboot-cycle tests no longer reproduce activation-time automatic reboot, abnormal two-to-three-minute black screens, or severe post-activation lag.
+- `3.0.30` is `DEVICE VERIFIED` on iPhone XS Max running iOS 18.2.1 as of 2026-08-24. All tested functionality is normal, no automatic reboot occurred, and the earlier Dopamine GUI Sandbox `shenanigans!` panic did not recur.
 - After a full device reboot and another activation, previously registered third-party dynamic trust-cache entries are restored and apps injected by TrollFools and equivalent RootHide API clients launch normally.
-- A later test ran normally for more than ten hours before one independent Sandbox `shenanigans!` panic occurred while the Dopamine GUI was starting. `3.0.30` removes that iOS 17+ GUI kerncred fallback and ports the applicable Dopamine 3.0.9 changes. Actions run `32615153841` and the downloaded artifact are verified, but the build is not device verified yet.
+- `3.0.31` narrows iOS 18 injection for three verified high-frequency Apple services, caches Jetsam settings for five seconds, and changes the safe default from 3x to 1.5x. It remains device-unverified until its build and live regression tests complete.
+- The remaining 3.0.30 issue is active-use heat and UI jank, not standby heat. USB desktop polling is a separate measurable contributor and must be controlled during comparisons.
 - Keep this result scoped to the tested device and OS. Other hardware and iOS versions still require independent device validation.
 - A CDHash that never reached the persistent registry cannot be reconstructed from an App container. Seed that file once through its original tool before testing reboot persistence.
 
@@ -43,11 +44,13 @@ logic.
 12. Persist third-party dynamic trust at the shared `jb_trustcache_add_entries()` boundary. Store versioned, bounded, checksummed entries under the dynamically mapped RootHide writable root; use atomic replacement and restore in launchdhook after it recovers primitives. The boomerang completion message must not report success before restore completes, and must carry restore errors back to the activation UI without aborting launchd. During an in-place upgrade, import existing live `jb_trustcache` pages before completing launchd handoff. Do not scan ordinary App containers, depend on `_TrollStoreLite`, persist tool-specific paths, or include fixed basebin/dyld UUID trust caches.
 13. Treat persistent trust as an explicit grant registry: old CDHashes remain until a successful explicit `trustcache clear`, and clear must update the kernel cache and persistent registry as one serialized operation. Never silently evict entries at the size limit or overwrite a malformed registry.
 14. Make the smallest change that preserves user data and existing RootHide invariants.
-15. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
-16. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
-17. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
-18. Validate on the device. For dynamic trust persistence, seed each pre-existing tool once after upgrading, record target CDHashes and the registry before reboot, then prove those hashes are restored before the tools or affected apps are launched after reboot. A CDHash absent from both the registry and live cache was never persisted and requires one successful tool registration before this test.
-19. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
+15. Exempt high-frequency stock services only by verified complete Apple system path and only on the affected OS range. Never use basename matching, and do not blanket-exempt `extensionkitservice` because it can host third-party extensions.
+16. Cache spawn-path settings with a short bounded TTL and thread-safe scalar state. Preserve live settings changes; never replace every-spawn XPC with a permanent cache. The 4 GB device baseline uses a 1.5x Jetsam default while keeping the user-selectable 1x-4x range.
+17. Increment both `Application/Makefile` and `BaseBin/_external/basebin/.version` together.
+18. Run `git diff --check`, inspect the complete diff, then build through `.github/workflows/roothide.yml`.
+19. Verify the downloaded artifact digest, TIPA integrity, app/basebin versions, required Mach-O slices, and any new runtime marker before installation.
+20. Validate on the device. For dynamic trust persistence, seed each pre-existing tool once after upgrading, record target CDHashes and the registry before reboot, then prove those hashes are restored before the tools or affected apps are launched after reboot. A CDHash absent from both the registry and live cache was never persisted and requires one successful tool registration before this test.
+21. Update the maintenance document with the confirmed result, release artifact, commit, and remaining risks.
 
 ## Upstream Sync
 

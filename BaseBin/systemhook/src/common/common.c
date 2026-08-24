@@ -17,6 +17,7 @@
 #include <libjailbreak/jbroot.h>
 #include <libjailbreak/hookd.h>
 #include <libkern/OSCacheControl.h>
+#include <math.h>
 #include <os/log.h>
 
 bool string_has_prefix(const char *str, const char* prefix)
@@ -122,6 +123,21 @@ xpc_object_t jbuserconfig_get_value(const char *key)
 
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
+	if (__builtin_available(iOS 18.0, *)) {
+		// These short-lived Apple services are fully platform signed and do not
+		// need RootHide path hooks, tweak loading, or dynamic trust processing.
+		// Match complete paths so third-party binaries with the same basename are
+		// never accidentally exempted.
+		const char *stockTransientServicePaths[] = {
+			"/System/Library/PrivateFrameworks/NanoTimeKit.framework/nanotimekitcompaniond",
+			"/System/Library/Frameworks/Metal.framework/XPCServices/MTLCompilerService.xpc/MTLCompilerService",
+			"/System/Library/Frameworks/AudioToolbox.framework/XPCServices/AudioConverterService.xpc/AudioConverterService",
+		};
+		for (size_t i = 0; i < sizeof(stockTransientServicePaths) / sizeof(stockTransientServicePaths[0]); i++) {
+			if (!strcmp(stockTransientServicePaths[i], path)) return 0;
+		}
+	}
+
 	// Blacklist to ensure general system stability
 	// I don't like this but for some processes it seems neccessary
 	const char *processBlacklist[] = {
@@ -265,7 +281,7 @@ static int spawn_exec_hook_common(bool isExec,
 	if (attrStruct) {
 		// If systemhook is being injected and jetsam limits are set, increase them by a factor of jetsamMultiplier
 		if (shouldInsertJBEnv) {
-			if (jetsamMultiplier == 0 || isnan(jetsamMultiplier)) jetsamMultiplier = 3; // default value (3x)
+			if (!isfinite(jetsamMultiplier) || jetsamMultiplier < 1) jetsamMultiplier = 1.5; // default value (1.5x)
 			if (jetsamMultiplier > 1) {
 				int memlimit_active = *(int*)(attrStruct + POSIX_SPAWNATTR_OFF_MEMLIMIT_ACTIVE);
 				if (memlimit_active != -1) {
