@@ -17,7 +17,7 @@
 | 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | `DEVICE VERIFIED`：月余稳定，完整重启后第三方动态 trust-cache 可恢复，既有注入 App 正常启动 |
 | 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | `DEVICE VERIFIED`：全部功能正常，未再发生自动重启；待机温度正常，但亮屏交互时仍有发热与掉帧 |
 | 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | `DEVICE REJECTED`：发热、卡顿和掉帧明显改善，但重新拉起的 `neagent` 会因 RootHide/TweakLoader 注入在 `rootfs_alloc` 中反复 SIGABRT，导致 VPN 永久卡在连接中并连带表现为 Wi-Fi 无网络 |
-| 3.0.32 | G1：iOS 18 `neagent` 精确豁免，并内置 Frida 16.3.3 RootHide arm64e 包 | `BUILD VERIFIED / DEVICE UNVERIFIED`：Actions 与独立产物核验通过，待真机月余/VPN 回归 |
+| 3.0.32 | G1：iOS 18 `neagent` 精确豁免，并内置 Frida 16.3.3 RootHide arm64e 包 | `DEVICE VERIFIED（VPN 修复）`：月余后多个 VPN 工具均可正常连接；内置 Frida 安装按钮仍为构建验证状态 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -1118,3 +1118,9 @@ GitHub API 的 artifact digest 与下载 ZIP 的 SHA-256 完全一致。外层 a
 Dopamine App 为 arm64；`libjailbreak.dylib`、`launchdhook.dylib`、`systemhook.dylib` 和 `jbctl` 均含 arm64 与 arm64e。最终产物继续包含 `SANDBOX-KERNCRED-18E1`、`UCRED-SMR-18A5`、`TRUSTCACHE-KALLOC-18B2`、`TRUSTCACHE-PERSIST-18C1`、`TRUSTCACHE-PERSIST-18D1`、`TRUSTFLOW-8A10`、`RESPRING-IOS18-BBD1`、`PERF-NOINJECT-IOS18-18F1`，并在 systemhook 双切片中包含新增 `NEAGENT-NOINJECT-IOS18-18G1`。
 
 TIPA 内 `frida_16.3.3_RootHides-arm64e.deb` 大小与 SHA-256 均和用户提供文件完全一致，且存在于 App `_CodeSignature/CodeResources` 的资源清单。control 元数据、LaunchDaemon、server/agent payload 和 arm64/arm64e 切片均已独立复核。TIPA 已保存为 `D:\LocalSend\roothide-Dopamine-3.0.32-a2619ac.tipa`。
+
+### 3.0.32 真机验证结果
+
+2026-08-26，用户安装 3.0.32 并完成月余后确认故障已完全修复，多个 NetworkExtension VPN 工具均可正常建立连接。原先 Loon 按需 VPN 永久停在“正在连接”、关闭 VPN 后 Wi-Fi 才恢复的现象未再出现。因此 `/usr/libexec/neagent` 完整路径注入豁免可在 iPhone XS Max、iOS 18.2.1 基线上标记为 `DEVICE VERIFIED`。
+
+该结论只覆盖本轮 `neagent`/VPN/Wi-Fi 回归。Frida 16.3.3 DEB 已完成来源、包内容、架构、运行时哈希校验逻辑及最终 TIPA 封装验证，但设置页“安装 Frida”操作尚未收到单独的真机执行结果，仍保持 `BUILD VERIFIED`，不得据此误标为已完成设备安装验证。

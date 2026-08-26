@@ -57,9 +57,12 @@ VPN provider could start, leaving on-demand VPN stuck connecting and making
 Wi-Fi appear offline. Version 3.0.32 excludes only that complete Apple system
 path on iOS 18 and bundles the device-matched Frida 16.3.3 RootHide arm64e DEB
 for offline installation. Actions run `32921982914` and artifact
-`roothide-Dopamine-3.0.32-a2619ac.tipa` are `BUILD VERIFIED`; a device
-activation/VPN regression test is still required. A successful GitHub Actions
-build only establishes that the source compiles and packages correctly.
+`roothide-Dopamine-3.0.32-a2619ac.tipa` are `BUILD VERIFIED`. On 2026-08-26,
+the target device completed activation and successfully connected multiple VPN
+tools, confirming the `neagent`/NetworkExtension fix. The bundled Frida
+installer remains separately build-verified until its settings action is tested
+on-device. A successful GitHub Actions build only establishes that the source
+compiles and packages correctly.
 
 
 
