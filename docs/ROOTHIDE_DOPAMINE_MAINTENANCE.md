@@ -17,7 +17,7 @@
 | 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | `DEVICE VERIFIED`：月余稳定，完整重启后第三方动态 trust-cache 可恢复，既有注入 App 正常启动 |
 | 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | `DEVICE VERIFIED`：全部功能正常，未再发生自动重启；待机温度正常，但亮屏交互时仍有发热与掉帧 |
 | 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | `DEVICE REJECTED`：发热、卡顿和掉帧明显改善，但重新拉起的 `neagent` 会因 RootHide/TweakLoader 注入在 `rootfs_alloc` 中反复 SIGABRT，导致 VPN 永久卡在连接中并连带表现为 Wi-Fi 无网络 |
-| 3.0.32 | G1：iOS 18 `neagent` 精确豁免，并内置 Frida 16.3.3 RootHide arm64e 包 | `DEVICE VERIFIED（VPN 修复）`：月余后多个 VPN 工具均可正常连接；内置 Frida 安装按钮仍为构建验证状态 |
+| 3.0.32 | G1：iOS 18 `neagent` 精确豁免；Frida 安装后续恢复为 3.0.31 的联网下载方式 | `DEVICE VERIFIED（VPN 修复）`：月余后多个 VPN 工具均可正常连接；Frida 安装回退未重新构建 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -1124,3 +1124,11 @@ TIPA 内 `frida_16.3.3_RootHides-arm64e.deb` 大小与 SHA-256 均和用户提�
 2026-08-26，用户安装 3.0.32 并完成月余后确认故障已完全修复，多个 NetworkExtension VPN 工具均可正常建立连接。原先 Loon 按需 VPN 永久停在“正在连接”、关闭 VPN 后 Wi-Fi 才恢复的现象未再出现。因此 `/usr/libexec/neagent` 完整路径注入豁免可在 iPhone XS Max、iOS 18.2.1 基线上标记为 `DEVICE VERIFIED`。
 
 该结论只覆盖本轮 `neagent`/VPN/Wi-Fi 回归。Frida 16.3.3 DEB 已完成来源、包内容、架构、运行时哈希校验逻辑及最终 TIPA 封装验证，但设置页“安装 Frida”操作尚未收到单独的真机执行结果，仍保持 `BUILD VERIFIED`，不得据此误标为已完成设备安装验证。
+
+### Frida 安装方式恢复
+
+2026-08-26，应用户要求仅回退 Frida 安装路径，不改动 `neagent`、VPN、trust-cache、Jetsam、版本号或其他功能。设置页已恢复 3.0.31 的实现：点击安装后从
+`https://github.com/sl-ars/frida-ios-stealth/releases/download/v17.17.0/frida_17.17.0_iphoneos-arm64e-roothide.deb`
+下载包，复制到 App 临时目录，调用 RootHide 环境的 `dpkg -i` 安装，随后删除临时文件并检查 `re.frida.server`、`frida-server` 与 LaunchDaemon。
+
+仓库与 App Resources 中的 `frida_16.3.3_RootHides-arm64e.deb` 已删除；CommonCrypto 文件哈希辅助代码、16.3.3 精确版本检查以及 GitHub Actions 的内置 DEB 校验也一并移除。上面的 run `32921982914` 和 `roothide-Dopamine-3.0.32-a2619ac.tipa` 仍是回退前的历史产物，包含曾内置的 16.3.3 DEB，不能代表当前源码的 Frida 安装方式。本次仅做 Frida 源码与资源回退，未重新编译。

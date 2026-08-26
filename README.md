@@ -55,14 +55,14 @@ a NetworkExtension regression: a newly spawned `/usr/libexec/neagent` received
 RootHide/TweakLoader injection and repeatedly aborted in `libroothide` before a
 VPN provider could start, leaving on-demand VPN stuck connecting and making
 Wi-Fi appear offline. Version 3.0.32 excludes only that complete Apple system
-path on iOS 18 and bundles the device-matched Frida 16.3.3 RootHide arm64e DEB
-for offline installation. Actions run `32921982914` and artifact
+path on iOS 18. Its Frida settings action uses the 3.0.31 behavior again and
+downloads the RootHide arm64e 17.17.0 DEB when installation is requested;
+there is no bundled Frida package. Actions run `32921982914` and artifact
 `roothide-Dopamine-3.0.32-a2619ac.tipa` are `BUILD VERIFIED`. On 2026-08-26,
 the target device completed activation and successfully connected multiple VPN
-tools, confirming the `neagent`/NetworkExtension fix. The bundled Frida
-installer remains separately build-verified until its settings action is tested
-on-device. A successful GitHub Actions build only establishes that the source
-compiles and packages correctly.
+tools, confirming the `neagent`/NetworkExtension fix. That artifact predates
+the Frida-only installer reversion. A successful GitHub Actions build only
+establishes that the source compiles and packages correctly.
 
 
 

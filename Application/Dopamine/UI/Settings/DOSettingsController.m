@@ -8,7 +8,6 @@
 #import "DOSettingsController.h"
 #import <objc/runtime.h>
 #import <Photos/Photos.h>
-#import <CommonCrypto/CommonDigest.h>
 #import <libjailbreak/util.h>
 #import <libjailbreak/jbroot.h>
 #import <libjailbreak/jbclient_xpc.h>
@@ -218,20 +217,6 @@ static void RHSendInstallLog(NSString *line)
     }
 }
 
-static NSString *RHSHA256ForFile(NSString *path, NSError **errorOut)
-{
-    NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:errorOut];
-    if (!data) return nil;
-
-    unsigned char digest[CC_SHA256_DIGEST_LENGTH] = {0};
-    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
-    NSMutableString *result = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
-    for (NSUInteger i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
-        [result appendFormat:@"%02x", digest[i]];
-    }
-    return result;
-}
-
 static BOOL RHRunRootUnsandboxed(void (^operation)(void))
 {
     if (!operation) return NO;
@@ -267,22 +252,6 @@ static BOOL RHStatusContainsInstalledPackage(NSString *packageName, NSString *ar
         if ([record containsString:[NSString stringWithFormat:@"Package: %@", packageName]] &&
             [record containsString:@"Status: install ok installed"] &&
             (!architecture.length || [record containsString:[NSString stringWithFormat:@"Architecture: %@", architecture]])) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-static BOOL RHStatusContainsInstalledPackageVersion(NSString *packageName, NSString *architecture, NSString *version)
-{
-    NSString *statusPath = JBROOT_PATH(@"/var/lib/dpkg/status");
-    NSString *status = [NSString stringWithContentsOfFile:statusPath encoding:NSUTF8StringEncoding error:nil];
-    if (!status.length) return NO;
-    for (NSString *record in [status componentsSeparatedByString:@"\n\n"]) {
-        if ([record containsString:[NSString stringWithFormat:@"Package: %@", packageName]] &&
-            [record containsString:@"Status: install ok installed"] &&
-            (!architecture.length || [record containsString:[NSString stringWithFormat:@"Architecture: %@", architecture]]) &&
-            (!version.length || [record containsString:[NSString stringWithFormat:@"Version: %@", version]])) {
             return YES;
         }
     }
@@ -398,66 +367,53 @@ static void RHInstallOpenSSH(void)
     }
 }
 
-static void RHInstallBundledFrida(void)
+static void RHInstallFridaFromURL(NSURL *url)
 {
-    static NSString * const packageResource = @"frida_16.3.3_RootHides-arm64e";
-    static NSString * const expectedVersion = @"16.3.3";
-    static unsigned long long const expectedSize = 53100090ULL;
-    static NSString * const expectedSHA256 = @"e1b48522fa28c512b875643fb58155ab655b6c5cf3e9590323eb371ed1dc3970";
+    RHSendInstallLog([NSString stringWithFormat:@"下载 RootHide Frida arm64e 包：%@", url.absoluteString]);
+    NSURLSessionDownloadTask *task = [[NSURLSession sharedSession] downloadTaskWithURL:url completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+        if (error || !location) {
+            RHSendInstallLog([NSString stringWithFormat:@"Frida 下载失败：%@", error.localizedDescription ?: @"未知错误"]);
+            RHSendInstallLog(@"RESULT: FAILED");
+            return;
+        }
+        if ([response isKindOfClass:[NSHTTPURLResponse class]] && [(NSHTTPURLResponse *)response statusCode] >= 400) {
+            RHSendInstallLog([NSString stringWithFormat:@"Frida 下载返回 HTTP %ld", (long)[(NSHTTPURLResponse *)response statusCode]]);
+            RHSendInstallLog(@"RESULT: FAILED");
+            return;
+        }
 
-    NSString *source = [NSBundle.mainBundle pathForResource:packageResource ofType:@"deb"];
-    if (!source.length) {
-        RHSendInstallLog(@"内置 Frida 16.3.3 RootHide arm64e 包不存在");
-        RHSendInstallLog(@"RESULT: FAILED");
-        return;
-    }
+        __block int installResult = EIO;
+        __block BOOL copied = NO;
+        NSString *destination = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"frida-roothide-%@.deb", NSUUID.UUID.UUIDString]];
+        NSError *copyError = nil;
+        copied = [[NSFileManager defaultManager] copyItemAtPath:location.path toPath:destination error:&copyError];
+        if (!copied) {
+            RHSendInstallLog([NSString stringWithFormat:@"复制 Frida 包失败：%@", copyError.localizedDescription ?: @"未知错误"]);
+        } else {
+            NSDictionary *fileAttributes = [[NSFileManager defaultManager] attributesOfItemAtPath:destination error:nil];
+            unsigned long long fileSize = [[fileAttributes objectForKey:NSFileSize] unsignedLongLongValue];
+            RHSendInstallLog([NSString stringWithFormat:@"已下载 %.1f MB，开始 dpkg 安装", (double)fileSize / (1024.0 * 1024.0)]);
+            installResult = RHRunInstallCommand(@[JBROOT_PATH(@"/usr/bin/dpkg"), @"-i", destination]);
+        }
+        [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
 
-    NSDictionary *sourceAttributes = [[NSFileManager defaultManager] attributesOfItemAtPath:source error:nil];
-    unsigned long long sourceSize = [sourceAttributes[NSFileSize] unsignedLongLongValue];
-    if (sourceSize != expectedSize) {
-        RHSendInstallLog([NSString stringWithFormat:@"内置 Frida 包大小校验失败：actual=%llu expected=%llu", sourceSize, expectedSize]);
-        RHSendInstallLog(@"RESULT: FAILED");
-        return;
-    }
-
-    NSError *hashError = nil;
-    NSString *actualSHA256 = RHSHA256ForFile(source, &hashError);
-    if (![actualSHA256 isEqualToString:expectedSHA256]) {
-        RHSendInstallLog([NSString stringWithFormat:@"内置 Frida 包 SHA-256 校验失败：actual=%@ expected=%@ error=%@",
-            actualSHA256 ?: @"<unavailable>", expectedSHA256, hashError.localizedDescription ?: @"none"]);
-        RHSendInstallLog(@"RESULT: FAILED");
-        return;
-    }
-
-    RHSendInstallLog([NSString stringWithFormat:@"安装内置 Frida %@ RootHide arm64e（%.1f MB）", expectedVersion, (double)sourceSize / (1024.0 * 1024.0)]);
-    RHSendInstallLog([NSString stringWithFormat:@"包 SHA-256 校验通过：%@", actualSHA256]);
-
-    NSString *destination = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"frida-roothide-%@.deb", NSUUID.UUID.UUIDString]];
-    NSError *copyError = nil;
-    BOOL copied = [[NSFileManager defaultManager] copyItemAtPath:source toPath:destination error:&copyError];
-    int installResult = EIO;
-    if (!copied) {
-        RHSendInstallLog([NSString stringWithFormat:@"复制内置 Frida 包失败：%@", copyError.localizedDescription ?: @"未知错误"]);
-    } else {
-        installResult = RHRunInstallCommand(@[JBROOT_PATH(@"/usr/bin/dpkg"), @"-i", destination]);
-    }
-    [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
-
-    __block BOOL packageInstalled = NO;
-    __block BOOL serverPresent = NO;
-    __block BOOL launchDaemonPresent = NO;
-    RHRunRootUnsandboxed(^{
-        packageInstalled = RHStatusContainsInstalledPackageVersion(@"re.frida.server", @"iphoneos-arm64e", expectedVersion);
-        serverPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/sbin/frida-server")];
-        launchDaemonPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/Library/LaunchDaemons/re.frida.server.plist")];
-    });
-    if (copied && installResult == 0 && packageInstalled && serverPresent && launchDaemonPresent) {
-        RHSendInstallLog(@"检测通过：Frida 16.3.3、frida-server 与 LaunchDaemon 均已安装");
-        RHSendInstallLog(@"RESULT: SUCCESS");
-    } else {
-        RHSendInstallLog([NSString stringWithFormat:@"检测失败：copied=%d exit=%d package=%d server=%d daemon=%d", copied, installResult, packageInstalled, serverPresent, launchDaemonPresent]);
-        RHSendInstallLog(@"RESULT: FAILED");
-    }
+        __block BOOL packageInstalled = NO;
+        __block BOOL serverPresent = NO;
+        __block BOOL launchDaemonPresent = NO;
+        RHRunRootUnsandboxed(^{
+            packageInstalled = RHStatusContainsInstalledPackage(@"re.frida.server", @"iphoneos-arm64e");
+            serverPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/usr/sbin/frida-server")];
+            launchDaemonPresent = [[NSFileManager defaultManager] fileExistsAtPath:JBROOT_PATH(@"/Library/LaunchDaemons/re.frida.server.plist")];
+        });
+        if (copied && installResult == 0 && packageInstalled && serverPresent && launchDaemonPresent) {
+            RHSendInstallLog(@"检测通过：re.frida.server、frida-server 与 LaunchDaemon 均已安装");
+            RHSendInstallLog(@"RESULT: SUCCESS");
+        } else {
+            RHSendInstallLog([NSString stringWithFormat:@"检测失败：copied=%d exit=%d package=%d server=%d daemon=%d", copied, installResult, packageInstalled, serverPresent, launchDaemonPresent]);
+            RHSendInstallLog(@"RESULT: FAILED");
+        }
+    }];
+    [task resume];
 }
 
 @implementation DOSettingsController
@@ -1132,8 +1088,14 @@ static void RHInstallBundledFrida(void)
 - (void)installFridaPressed
 {
     [self pushRootHideInstallLogWithTitle:DOLocalizedString(@"Button_Install_Frida") operation:^{
-        RHSendInstallLog(@"开始安装 Frida Server（内置 RootHide arm64e 专用包）");
-        RHInstallBundledFrida();
+        RHSendInstallLog(@"开始安装 Frida Server（RootHide arm64e 专用包）");
+        NSURL *url = [NSURL URLWithString:@"https://github.com/sl-ars/frida-ios-stealth/releases/download/v17.17.0/frida_17.17.0_iphoneos-arm64e-roothide.deb"];
+        if (!url) {
+            RHSendInstallLog(@"Frida 下载地址无效");
+            RHSendInstallLog(@"RESULT: FAILED");
+            return;
+        }
+        RHInstallFridaFromURL(url);
     }];
 }
 
