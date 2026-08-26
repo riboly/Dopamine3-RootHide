@@ -18,7 +18,7 @@
 | 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | `DEVICE VERIFIED`：全部功能正常，未再发生自动重启；待机温度正常，但亮屏交互时仍有发热与掉帧 |
 | 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | `DEVICE REJECTED`：发热、卡顿和掉帧明显改善，但重新拉起的 `neagent` 会因 RootHide/TweakLoader 注入在 `rootfs_alloc` 中反复 SIGABRT，导致 VPN 永久卡在连接中并连带表现为 Wi-Fi 无网络 |
 | 3.0.32 | G1：iOS 18 `neagent` 精确豁免；Frida 安装后续恢复为 3.0.31 的联网下载方式 | `DEVICE VERIFIED（VPN 修复）`：月余后多个 VPN 工具均可正常连接；Frida 安装回退未重新构建 |
-| 3.0.33 | H1：打包 Frida 联网安装回退，并将手动工作流默认设为完整构建 | 待本轮手动 GitHub Actions 构建完成 |
+| 3.0.33 | H1：打包 Frida 联网安装回退，并将手动工作流默认设为完整构建 | `BUILD VERIFIED`：手动 workflow_dispatch 完整构建成功，产物可从 run `32981228809` 下载 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -1133,3 +1133,18 @@ TIPA 内 `frida_16.3.3_RootHides-arm64e.deb` 大小与 SHA-256 均和用户提�
 下载包，复制到 App 临时目录，调用 RootHide 环境的 `dpkg -i` 安装，随后删除临时文件并检查 `re.frida.server`、`frida-server` 与 LaunchDaemon。
 
 仓库与 App Resources 中的 `frida_16.3.3_RootHides-arm64e.deb` 已删除；CommonCrypto 文件哈希辅助代码、16.3.3 精确版本检查以及 GitHub Actions 的内置 DEB 校验也一并移除。上面的 run `32921982914` 和 `roothide-Dopamine-3.0.32-a2619ac.tipa` 仍是回退前的历史产物，包含曾内置的 16.3.3 DEB，不能代表当前源码的 Frida 安装方式。本次仅做 Frida 源码与资源回退，未重新编译。
+
+### 3.0.33 手动构建记录
+
+默认分支 `3.x` 原先没有 `.github/workflows/roothide.yml`，因此 GitHub 网页不显示 “Run workflow”。提交 `e05643cf` 在默认分支加入仅用于注册 `workflow_dispatch` 的入口；选择 `roothide-3.x` 后使用该分支的完整工作流。RootHide 工作流的 `build_mode` 默认值同时改为 `full`。
+
+```text
+source commit: ed8387a5988f301ee2808159844b7e6ead148d18
+workflow event: workflow_dispatch
+workflow run: 32981228809
+artifact id: 9611621882
+artifact: roothide-Dopamine-3.0.33-ed8387a.tipa
+artifact size: 54,534,132 bytes
+artifact digest: sha256:ab4b7bdb46a6f75bf7cfe391c043a77e90a591f524f5116004be9a16907126cd
+status: BUILD VERIFIED
+```

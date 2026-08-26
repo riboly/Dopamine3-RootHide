@@ -58,7 +58,8 @@ Wi-Fi appear offline. Version 3.0.32 excludes only that complete Apple system
 path on iOS 18. Its Frida settings action uses the 3.0.31 behavior again and
 downloads the RootHide arm64e 17.17.0 DEB when installation is requested;
 there is no bundled Frida package. Version 3.0.33 packages this current source
-and makes manual workflow runs default to a full TIPA build. Actions run
+and makes manual workflow runs default to a full TIPA build. Manual Actions run
+`32981228809` produced `roothide-Dopamine-3.0.33-ed8387a.tipa`. Actions run
 `32921982914` and artifact
 `roothide-Dopamine-3.0.32-a2619ac.tipa` are `BUILD VERIFIED`. On 2026-08-26,
 the target device completed activation and successfully connected multiple VPN
