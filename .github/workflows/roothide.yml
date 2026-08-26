@@ -1,0 +1,26 @@
+name: Build roothide Dopamine
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: Build scope
+        required: true
+        default: full
+        type: choice
+        options:
+          - focused
+          - full
+
+permissions:
+  contents: read
+
+jobs:
+  select-roothide-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Select the RootHide branch
+        run: |
+          echo "This default-branch file exposes the Run workflow button."
+          echo "Select roothide-3.x in the branch menu to run the complete RootHide build."
+          exit 1
