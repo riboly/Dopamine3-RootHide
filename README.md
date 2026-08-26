@@ -56,9 +56,10 @@ RootHide/TweakLoader injection and repeatedly aborted in `libroothide` before a
 VPN provider could start, leaving on-demand VPN stuck connecting and making
 Wi-Fi appear offline. Version 3.0.32 excludes only that complete Apple system
 path on iOS 18 and bundles the device-matched Frida 16.3.3 RootHide arm64e DEB
-for offline installation. It still requires build verification and a device
-activation/VPN regression test. A successful GitHub Actions build only
-establishes that the source compiles and packages correctly.
+for offline installation. Actions run `32921982914` and artifact
+`roothide-Dopamine-3.0.32-a2619ac.tipa` are `BUILD VERIFIED`; a device
+activation/VPN regression test is still required. A successful GitHub Actions
+build only establishes that the source compiles and packages correctly.
 
 
 
