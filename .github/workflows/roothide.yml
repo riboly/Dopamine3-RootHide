@@ -6,7 +6,7 @@ on:
       build_mode:
         description: Build scope
         required: true
-        default: focused
+        default: full
         type: choice
         options:
           - focused
