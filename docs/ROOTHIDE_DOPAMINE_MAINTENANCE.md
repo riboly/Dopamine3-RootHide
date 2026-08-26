@@ -16,7 +16,8 @@
 | 3.0.28 | C1：通用动态 trust-cache 注册表 | 真机注册表有效，但主按钮路径未恢复；月余时可自动重启或长时间黑屏卡顿，不能使用 |
 | 3.0.29 | B2/D1：内核 allocator 与 launchd 同步持久恢复 | `DEVICE VERIFIED`：月余稳定，完整重启后第三方动态 trust-cache 可恢复，既有注入 App 正常启动 |
 | 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | `DEVICE VERIFIED`：全部功能正常，未再发生自动重启；待机温度正常，但亮屏交互时仍有发热与掉帧 |
-| 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | `BUILD VERIFIED / DEVICE UNVERIFIED`：Actions 与产物核验通过，待真机性能和完整功能回归 |
+| 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | `DEVICE REJECTED`：发热、卡顿和掉帧明显改善，但重新拉起的 `neagent` 会因 RootHide/TweakLoader 注入在 `rootfs_alloc` 中反复 SIGABRT，导致 VPN 永久卡在连接中并连带表现为 Wi-Fi 无网络 |
+| 3.0.32 | G1：iOS 18 `neagent` 精确豁免，并内置 Frida 16.3.3 RootHide arm64e 包 | 源码修复完成；待 Actions 构建、产物核验和真机月余/VPN 回归 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -1025,3 +1026,77 @@ status: BUILD VERIFIED / DEVICE UNVERIFIED
 GitHub API 报告的 artifact ZIP 大小为 54,534,012 字节，下载文件的 SHA-256 与 API digest 完全一致。外层 artifact 仅含目标 TIPA，TIPA 含 131 项，内嵌 `basebin.tar` 含 31 项；两层归档的 CRC 和路径安全检查全部通过。App 标识为 `com.opa334.Dopamine-roothide`，App/basebin 版本均为 3.0.31，内嵌 `.build` 与 source commit 完全一致。
 
 Dopamine App 为 arm64；部署用 `libjailbreak.dylib`、`launchdhook.dylib`、`systemhook.dylib` 和 `jbctl` 均含 arm64 与 arm64e。最终产物继续包含 `SANDBOX-KERNCRED-18E1`、`UCRED-SMR-18A5`、`TRUSTCACHE-KALLOC-18B2`、`TRUSTCACHE-PERSIST-18C1`、`TRUSTCACHE-PERSIST-18D1`、`TRUSTFLOW-8A10`、`RESPRING-IOS18-BBD1`，并包含新增 `PERF-NOINJECT-IOS18-18F1`。TIPA 已保存为 `D:\LocalSend\roothide-Dopamine-3.0.31-b3ef580.tipa`。
+
+## 22. 3.0.32：NetworkExtension `neagent` 注入崩溃与离线 Frida 16.3.3
+
+### 现场诊断
+
+2026-08-26，3.0.31 真机月余后出现设置中 Wi-Fi 已连接、状态栏无 Wi-Fi 图标且前台无法联网。完整重启后未月余状态正常，再次月余后复现。实时网络日志证明 `en0`、IPv4/IPv6、DNS 和部分不经过 VPN 策略的系统 TLS 请求均正常，因此不是 Wi-Fi 射频、DHCP、DNS 或 `wifid` 整体故障。
+
+故障流量均命中 Loon 的按需 VPN agent：
+
+```text
+Network Agent [domain: NetworkExtension, type: VPN, description: VPN: Loon] VPN is inactive
+waiting parent-flow
+POSIX [50: Network is down]
+NESMVPNSession ... Skip a start command ... session in state connecting
+```
+
+用户手动关闭 VPN 后 Wi-Fi 立即恢复，确认“Wi-Fi 无网络”是被卡死的 NetworkExtension 策略连带造成。系统 CrashReporter 在 2026-08-26 01:45 至 02:05 间生成 25 份 `neagent` SIGABRT 报告；`launchctl print user/501/com.apple.neagent-ios.<instance>` 显示：
+
+```text
+program = /usr/libexec/neagent
+runs = 18
+successive crashes = 18
+last terminating signal = Abort trap: 6
+jetsam memory limit (active, soft) = 6 MB
+jetsam memory limit (inactive, hard) = 6 MB
+```
+
+每份崩溃栈都稳定经过：
+
+```text
+/usr/lib/systemhook-<brand>.dylib
+ElleKit libinjector.dylib (injection_init)
+DynamicPatches/AutoPatches.dylib
+roothidepatch.dylib
+libroothide.dylib rootfs() / rootfs_alloc()
+__assert_rtn -> abort
+```
+
+终止命名空间为 `SIGNAL`，信号为 `SIGABRT`，并非 Jetsam，因此把全局倍率从 1.5×调回 3×不能修复。3.0.31 之前 VPN 曾正常，是因为月余前已经存在的 `neagent` 可以继续运行；该进程后来退出并由 launchd 在月余环境下重新拉起，才收到 systemhook/TweakLoader 注入并进入稳定 crash loop。
+
+### G1 修复设计
+
+- 在 iOS 18+ 的 `spawn_config_for_executable()` 中仅对完整路径 `/usr/libexec/neagent` 返回 0，使 Apple 平台签名的 NetworkExtension broker 不再接收 systemhook、RootHide AutoPatches 或 TweakLoader，也不执行无意义的动态 trust 处理。
+- 不豁免 Loon、Egern、Shadowrocket 等第三方 App/Packet Tunnel，不使用 basename 匹配，也不扩大到 `extensionkitservice`。该变更只移除导致 Apple broker 在 provider 启动前崩溃的越狱注入层。
+- 新增产物标记 `NEAGENT-NOINJECT-IOS18-18G1`，focused/full Actions 都必须检查。
+- 版本在 `Application/Makefile` 与 `BaseBin/_external/basebin/.version` 同步推进为 3.0.32。
+
+### Frida 16.3.3 RootHide 包
+
+用户提供的 `D:\LocalSend\frida_16.3.3_RootHides-arm64e.deb` 已做只读检查：
+
+```text
+Package: re.frida.server
+Version: 16.3.3
+Architecture: iphoneos-arm64e
+Pre-Depends: rootless-compat(>= 0.9)
+size: 53,100,090 bytes
+SHA-256: e1b48522fa28c512b875643fb58155ab655b6c5cf3e9590323eb371ed1dc3970
+```
+
+包内含 `/usr/sbin/frida-server`、`/usr/lib/frida/frida-agent.dylib`、`/Library/LaunchDaemons/re.frida.server.plist` 及对应 `.roothidepatch` 链接。`frida-server` 含 arm64、arm64e v1 和 arm64e v2 三个切片；`frida-agent.dylib` 含 arm64 与 arm64e v2。3.0.32 将该 DEB 原样放入 App Resources，设置页安装按钮改为从 App bundle 复制到临时目录后调用 RootHide `dpkg -i`，不再依赖 GitHub 下载或 VPN/外网状态。安装成功判定同时要求 `re.frida.server` 的版本为 16.3.3、架构为 `iphoneos-arm64e`，并检查 server 与 LaunchDaemon 文件。Actions 在构建前校验源 DEB 的 SHA-256 和 control 元数据，在完整构建后再次校验 App bundle 内的 DEB。
+
+### 3.0.32 验证要求
+
+1. `git diff --check`、完整 diff 和冲突标记检查通过；不得触碰用户未跟踪的 `$d/`。
+2. focused/full Actions 必须找到 `NEAGENT-NOINJECT-IOS18-18G1`，并继续保留全部 credential、trust-cache、Sandbox、respring 与 3.0.31 性能标记。
+3. TIPA 必须同时报告 App/basebin 3.0.32，关键 basebin Mach-O 保留 arm64/arm64e；内置 Frida DEB 的 SHA-256 必须与上述值完全一致。
+4. 经用户授权安装并月余后，启动 Loon VPN；`neagent` 必须保持运行，不再生成新的 SIGABRT 报告，VPN 能建立，Wi-Fi 图标与互联网访问正常。然后至少再验证一个不同的 NetworkExtension VPN 工具。
+5. 确认普通 App、第三方动态 trust-cache 恢复、TrollFools 注入 App、Sileo/Zebra、OpenSSH、Frida、respring 和既有 1.5×性能优化均无回归。
+6. 构建成功只能标记为 `BUILD VERIFIED`；只有完成上述真机月余与 VPN 回归后才能标记为 `DEVICE VERIFIED`。
+
+### 3.0.32 构建记录
+
+待 GitHub Actions 和独立产物核验完成后补充。

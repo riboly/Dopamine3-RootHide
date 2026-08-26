@@ -146,6 +146,23 @@ jobs:
             ./etc/apt/trusted.gpg.d/roothide-procursus.gpg > "$archived_keyring"
           cmp "$keyring" "$archived_keyring"
 
+      - name: Verify bundled Frida package
+        run: |
+          set -euo pipefail
+          package="Application/Dopamine/Resources/frida_16.3.3_RootHides-arm64e.deb"
+          expected_sha256="e1b48522fa28c512b875643fb58155ab655b6c5cf3e9590323eb371ed1dc3970"
+          test "$(shasum -a 256 "$package" | awk '{print $1}')" = "$expected_sha256"
+
+          bsdtar="$(brew --prefix libarchive)/bin/bsdtar"
+          package_dir="$RUNNER_TEMP/frida-package"
+          control_dir="$RUNNER_TEMP/frida-control"
+          mkdir -p "$package_dir" "$control_dir"
+          "$bsdtar" -xf "$package" -C "$package_dir"
+          "$bsdtar" -xf "$package_dir/control.tar.zst" -C "$control_dir"
+          grep -Fx "Package: re.frida.server" "$control_dir/control"
+          grep -Fx "Version: 16.3.3" "$control_dir/control"
+          grep -Fx "Architecture: iphoneos-arm64e" "$control_dir/control"
+
       - name: Focused build systemhook
         if: env.BUILD_MODE == 'focused'
         run: |
@@ -159,6 +176,7 @@ jobs:
           strings artifacts/systemhook.dylib | grep -F "TRUSTFLOW-8A10"
           strings artifacts/systemhook.dylib | grep -F "RESPRING-IOS18-BBD1"
           strings artifacts/systemhook.dylib | grep -F "PERF-NOINJECT-IOS18-18F1"
+          strings artifacts/systemhook.dylib | grep -F "NEAGENT-NOINJECT-IOS18-18G1"
 
       - name: Full build TIPA
         if: env.BUILD_MODE == 'full'
@@ -192,6 +210,10 @@ jobs:
           strings BaseBin/.build/launchdhook.dylib | grep -F "TRUSTCACHE-PERSIST-18D1"
           strings BaseBin/.build/systemhook.dylib | grep -F "RESPRING-IOS18-BBD1"
           strings BaseBin/.build/systemhook.dylib | grep -F "PERF-NOINJECT-IOS18-18F1"
+          strings BaseBin/.build/systemhook.dylib | grep -F "NEAGENT-NOINJECT-IOS18-18G1"
+
+          bundled_frida="Application/build/Build/Products/Debug-iphoneos/Dopamine.app/frida_16.3.3_RootHides-arm64e.deb"
+          test "$(shasum -a 256 "$bundled_frida" | awk '{print $1}')" = "e1b48522fa28c512b875643fb58155ab655b6c5cf3e9590323eb371ed1dc3970"
 
           version="$(cat BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)"
           artifact="roothide-Dopamine-${version}.tipa"

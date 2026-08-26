@@ -64,13 +64,18 @@ void string_enumerate_components(const char *string, const char *separator, void
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
 	if (__builtin_available(iOS 18.0, *)) {
-		const char *stockTransientServicePaths[] = {
+		const char *stockNoInjectServicePaths[] = {
 			"/System/Library/PrivateFrameworks/NanoTimeKit.framework/nanotimekitcompaniond",
 			"/System/Library/Frameworks/Metal.framework/XPCServices/MTLCompilerService.xpc/MTLCompilerService",
 			"/System/Library/Frameworks/AudioToolbox.framework/XPCServices/AudioConverterService.xpc/AudioConverterService",
+			// neagent is Apple's platform-signed NetworkExtension broker. Injecting
+			// systemhook lets TweakLoader load RootHide AutoPatches before a VPN
+			// provider starts; on iOS 18.2.1 that aborts in libroothide rootfs_alloc
+			// and leaves on-demand VPN sessions permanently stuck connecting.
+			"/usr/libexec/neagent",
 		};
-		for (size_t i = 0; i < sizeof(stockTransientServicePaths) / sizeof(stockTransientServicePaths[0]); i++) {
-			if (!strcmp(stockTransientServicePaths[i], path)) return 0;
+		for (size_t i = 0; i < sizeof(stockNoInjectServicePaths) / sizeof(stockNoInjectServicePaths[0]); i++) {
+			if (!strcmp(stockNoInjectServicePaths[i], path)) return 0;
 		}
 	}
 

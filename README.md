@@ -50,14 +50,15 @@ in-app update screen reads release notes from the same location.
 Version 3.0.30 is `DEVICE VERIFIED` on this target: activation, third-party
 dynamic trust-cache restoration, injected apps, and the Dopamine GUI all work
 normally, with no automatic reboot during the reported test window. Version
-3.0.31 reduces active-use overhead by excluding three verified high-frequency
-Apple services from iOS 18 systemhook injection, caching Jetsam settings for
-five seconds, and changing the 4 GB device default from 3x to 1.5x. It remains
-device-unverified, but Actions run `32688829154` and the downloaded 3.0.31
-artifact have passed build, integrity, version, architecture, and runtime-marker
-verification. Live performance and full function tests still remain. A
-successful GitHub Actions build only establishes that the source compiles and
-packages correctly.
+3.0.31 materially reduced active-use heat and UI jank, but device testing found
+a NetworkExtension regression: a newly spawned `/usr/libexec/neagent` received
+RootHide/TweakLoader injection and repeatedly aborted in `libroothide` before a
+VPN provider could start, leaving on-demand VPN stuck connecting and making
+Wi-Fi appear offline. Version 3.0.32 excludes only that complete Apple system
+path on iOS 18 and bundles the device-matched Frida 16.3.3 RootHide arm64e DEB
+for offline installation. It still requires build verification and a device
+activation/VPN regression test. A successful GitHub Actions build only
+establishes that the source compiles and packages correctly.
 
 
 
