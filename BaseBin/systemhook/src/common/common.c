@@ -1,4 +1,5 @@
 #include "common.h"
+#include "critical_services.h"
 #include <xpc/xpc.h>
 #include <xpc_private.h>
 #include <mach-o/dyld.h>
@@ -123,25 +124,7 @@ xpc_object_t jbuserconfig_get_value(const char *key)
 
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
-	if (__builtin_available(iOS 18.0, *)) {
-		// These short-lived Apple services are fully platform signed and do not
-		// need RootHide path hooks, tweak loading, or dynamic trust processing.
-		// Match complete paths so third-party binaries with the same basename are
-		// never accidentally exempted.
-		const char *stockNoInjectServicePaths[] = {
-			"/System/Library/PrivateFrameworks/NanoTimeKit.framework/nanotimekitcompaniond",
-			"/System/Library/Frameworks/Metal.framework/XPCServices/MTLCompilerService.xpc/MTLCompilerService",
-			"/System/Library/Frameworks/AudioToolbox.framework/XPCServices/AudioConverterService.xpc/AudioConverterService",
-			// neagent is Apple's platform-signed NetworkExtension broker. Injecting
-			// systemhook lets TweakLoader load RootHide AutoPatches before a VPN
-			// provider starts; on iOS 18.2.1 that aborts in libroothide rootfs_alloc
-			// and leaves on-demand VPN sessions permanently stuck connecting.
-			"/usr/libexec/neagent",
-		};
-		for (size_t i = 0; i < sizeof(stockNoInjectServicePaths) / sizeof(stockNoInjectServicePaths[0]); i++) {
-			if (!strcmp(stockNoInjectServicePaths[i], path)) return 0;
-		}
-	}
+	if (roothide_critical_service_should_skip_injection(path)) return 0;
 
 	// Blacklist to ensure general system stability
 	// I don't like this but for some processes it seems neccessary
