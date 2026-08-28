@@ -160,8 +160,7 @@ jobs:
           strings artifacts/systemhook.dylib | grep -F "RESPRING-IOS18-BBD1"
           strings artifacts/systemhook.dylib | grep -F "PERF-NOINJECT-IOS18-18F1"
           strings artifacts/systemhook.dylib | grep -F "NEAGENT-NOINJECT-IOS18-18G1"
-          strings artifacts/systemhook.dylib | grep -F "THERMAL-NOINJECT-IOS18-18H1"
-          strings artifacts/systemhook.dylib | grep -F "WATCHDOG-QUARANTINE-IOS18-18H2"
+          strings artifacts/systemhook.dylib | grep -F "THERMAL-NOINJECT-IOS18-18I1"
 
       - name: Full build TIPA
         if: env.BUILD_MODE == 'full'
@@ -196,8 +195,7 @@ jobs:
           strings BaseBin/.build/systemhook.dylib | grep -F "RESPRING-IOS18-BBD1"
           strings BaseBin/.build/systemhook.dylib | grep -F "PERF-NOINJECT-IOS18-18F1"
           strings BaseBin/.build/systemhook.dylib | grep -F "NEAGENT-NOINJECT-IOS18-18G1"
-          strings BaseBin/.build/systemhook.dylib | grep -F "THERMAL-NOINJECT-IOS18-18H1"
-          strings BaseBin/.build/systemhook.dylib | grep -F "WATCHDOG-QUARANTINE-IOS18-18H2"
+          strings BaseBin/.build/systemhook.dylib | grep -F "THERMAL-NOINJECT-IOS18-18I1"
 
           version="$(cat BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)"
           artifact="roothide-Dopamine-${version}.tipa"

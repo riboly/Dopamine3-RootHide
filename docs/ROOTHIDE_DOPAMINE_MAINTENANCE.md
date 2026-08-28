@@ -18,8 +18,9 @@
 | 3.0.30 | E1：同步上游 3.0.9，并禁止 iOS 17+ GUI 借用完整 kerncred | `DEVICE VERIFIED`：全部功能正常，未再发生自动重启；待机温度正常，但亮屏交互时仍有发热与掉帧 |
 | 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | `DEVICE REJECTED`：发热、卡顿和掉帧明显改善，但重新拉起的 `neagent` 会因 RootHide/TweakLoader 注入在 `rootfs_alloc` 中反复 SIGABRT，导致 VPN 永久卡在连接中并连带表现为 Wi-Fi 无网络 |
 | 3.0.32 | G1：iOS 18 `neagent` 精确豁免；Frida 安装后续恢复为 3.0.31 的联网下载方式 | `DEVICE VERIFIED（VPN 修复）`：月余后多个 VPN 工具均可正常连接；Frida 安装回退未重新构建 |
-| 3.0.33 | H1：打包 Frida 联网安装回退，并将手动工作流默认设为完整构建 | `DEVICE VERIFIED`：长期使用特别稳定；后续 thermalmonitord 故障由新安装的不兼容 CPU/温控 tweak 触发，不是 3.0.33 自身随机回归 |
-| 3.0.34 | H2：iOS 18 thermalmonitord 固定注入保护与受限 watchdog 自动隔离 | `BUILD VERIFIED / DEVICE UNVERIFIED`：Actions 完整构建与产物核验通过；真机安装、月余和重启回归尚未执行 |
+| 3.0.33 | H1：打包 Frida 联网安装回退，并将手动工作流默认设为完整构建 | `BUILD VERIFIED`：手动 workflow_dispatch 完整构建成功，产物可从 run `32981228809` 下载 |
+| 3.0.34 | H2：thermalmonitord 固定保护、watchdog 自动隔离与共享关键服务模块 | `DEVICE REJECTED`：安装后严重卡顿，Wi-Fi/VPN 频繁断开重连；本版本全部相关代码回退 |
+| 3.0.35 | I1：回到 3.0.33 运行时设计，仅对 `/usr/libexec/thermalmonitord` 做静态完整路径 no-injection | `BUILD PENDING`：等待完整构建；真机安装和重启回归尚未执行 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -1150,106 +1151,21 @@ artifact digest: sha256:ab4b7bdb46a6f75bf7cfe391c043a77e90a591f524f5116004be9a16
 status: BUILD VERIFIED
 ```
 
-## 23. 3.0.34：thermalmonitord 注入保护与 watchdog 自动隔离
+## 23. 3.0.34 回退与 3.0.35 thermalmonitord 最小修复
 
-### 现场证据与归因
+2026-08-28，用户实测 3.0.34 后确认：设备出现明显严重卡顿，Wi-Fi/VPN 频繁断开并重新连接，决定放弃 3.0.34。该版本引入的共享 `critical_services.c`、每进程隔离文件读取/缓存、watchdog 自动 quarantine、`jbctl stability` 管理入口以及相关工作流/文档变更均已回退到 3.0.33 基线。
 
-2026-08-27，用户在稳定运行的 3.0.33 环境中安装 `byg.iosios.net.monitor` 1.5.7-7。安装后系统先自动注销并关闭全部 tweak 注入，随后显示 watchdog userspace panic：
+3.0.35 只保留一个针对已确认故障的静态修复：在 `BaseBin/systemhook/src/common.c` 与 `BaseBin/systemhook/src/common/common.c` 两条 spawn 配置路径中，对完整 Apple 路径 `/usr/libexec/thermalmonitord` 返回 no-injection。现场证据是安装 `byg.iosios.net.monitor` 1.5.7-7 后出现：
 
 ```text
 no successful checkins from thermalmonitord (2 induced crashes)
 Missing sensor(s): Prs0
 ```
 
-截图保存在 `D:\LocalSend\IMG_1966.PNG`。设备日志时间线显示：
-
-- 22:58 安装 `byg.iosios.net.monitor` 1.5.7-7；
-- 22:59、23:00 生成 `thermalmonitord` watchdog 报告，23:01 生成 userspace panic；
-- 23:04 卸载，23:05 再次安装；
-- 23:08、23:09 再次生成 `thermalmonitord` watchdog 报告，23:10 第二次 userspace panic并卸载。
-
-对应报告名为：
+该策略不读取文件、不维护跨进程 quarantine 状态、不终止服务、不改变 Jetsam、trust-cache、VPN、Frida 或第三方 App 注入；普通 App 和第三方扩展仍按 3.0.33 逻辑处理。新增运行时标记为：
 
 ```text
-thermalmonitord-2026-08-27-225947.ips
-thermalmonitord-2026-08-27-230047.ips
-thermalmonitord-2026-08-27-230849.ips
-thermalmonitord-2026-08-27-230947.ips
-userspace-panic-1787842907.190948-1.ips
-userspace-panic-1787843447.83581-1.ips
+THERMAL-NOINJECT-IOS18-18I1
 ```
 
-`com.qms.cpudasher` 在第一次故障前已经卸载，不能解释两轮与 `byg.iosios.net.monitor` 安装/卸载严格同步的复现。用户卸载该包后，`launchctl` 显示 `/usr/libexec/thermalmonitord` 持续运行、没有退出记录。因此直接责任高度确定为该 CPU/温控 tweak 对 thermalmonitord 的不兼容注入；Dopamine 的自动 safe mode 和 userspace reboot 是 watchdoghook 按设计阻止整机持续故障，不是新的内核 panic。
-
-### H2 防护设计
-
-1. 在 iOS 18+ 的两条 `spawn_config_for_executable()` 路径统一调用 `critical_services.c`，只按完整 Apple 可执行路径判断，不使用 basename。
-2. `/usr/libexec/thermalmonitord` 加入固定 no-injection 列表。它与既有三个性能服务及 `/usr/libexec/neagent` 一样，不再接收 systemhook、RootHide AutoPatches 或 TweakLoader；该固定规则不能通过管理命令删除。
-3. 对少量经过审查、且不承载第三方 App Extension 的专用 Apple 服务启用 watchdog 自动隔离。只有 panic 文本同时包含字面量 `induced crashes`，并且 watchdog 服务名精确映射到下列完整路径时，才持久加入隔离：
-
-```text
-/usr/libexec/thermalmonitord
-/System/Library/CoreServices/powerd.bundle/powerd
-/usr/sbin/wifid
-/usr/libexec/configd
-/System/Library/Frameworks/CoreTelephony.framework/Support/CommCenter
-/usr/libexec/logd
-/usr/libexec/runningboardd
-/usr/libexec/audiomxd
-/usr/libexec/backboardd
-```
-
-4. `SpringBoard`、`extensionkitservice` 和 `watchdogd` 明确不在自动隔离范围。前两者会造成过宽的第三方功能损失；豁免 `watchdogd` 会破坏 Dopamine 拦截 userspace panic、进入 safe mode 并执行受控 userspace reboot 的保护链。
-5. 自动规则保存在动态 RootHide 可写根的 `/var/mobile/Library/RootHide/watchdog-noinject-v1.txt`。写入使用独立文件锁、白名单解析、`mkstemp`、fsync 和原子 rename；systemhook 每个进程以 2 秒有界缓存读取，避免每次 spawn 都访问文件，同时允许新规则在后续 spawn 生效。
-6. 管理入口为：
-
-```sh
-jbctl stability quarantine list
-sudo jbctl stability quarantine clear
-```
-
-`clear` 只删除 watchdog 自动规则，不会删除 thermalmonitord、neagent 或三个性能服务的固定保护。清除要求 root，避免普通进程意外取消稳定性保护。
-
-### 包安装预检边界
-
-本版不在 Dopamine 内全局包装或拦截 `dpkg`、APT、Sileo 与 Zebra。DEB control、维护脚本和 MobileSubstrate filter 不能完整表达所有运行时注入行为；有的包还会在安装后生成配置或由其他 loader 管理。把静态扫描结果作为全局阻断条件会产生误报，并让包管理器成为新的启动与升级单点故障。3.0.34 因此把强制保护放在最终 spawn 注入边界，并用 watchdog 的真实 `induced crashes` 证据为未知专用服务生成下一次启动生效的隔离规则。
-
-这意味着未知服务第一次遇到不兼容 tweak 时仍可能触发一次 Dopamine 已有的 safe-mode userspace reboot；目标是使同一路径在后续启动自动停止注入，而不是在缺乏证据时永久关闭大量系统服务的 tweak 能力。
-
-### 构建与真机验证要求
-
-1. `Application/Makefile` 与 `BaseBin/_external/basebin/.version` 必须同时为 3.0.34；focused/full Actions 均检查 `THERMAL-NOINJECT-IOS18-18H1` 和 `WATCHDOG-QUARANTINE-IOS18-18H2`。
-2. TIPA 必须继续包含全部 credential、trust-cache、Sandbox、respring、性能和 neagent 标记；`systemhook.dylib`、`launchdhook.dylib` 与 `jbctl` 保留 arm64/arm64e。
-3. 安装并月余后，只读确认 thermalmonitord 未加载 systemhook、RootHide AutoPatches 或第三方 tweak，且温度传感、自动亮度、充电与正常降频行为没有回归。
-4. 验证 `jbctl stability quarantine list` 在无规则时正常；用真实 watchdog 故障验证自动隔离必须另行取得用户授权，不得为测试主动终止服务或制造 userspace panic。
-5. 回归 Sileo/Zebra、OpenSSH、Frida、多个 VPN、TrollFools 注入 App、第三方动态 trust-cache 完整重启恢复、respring 和 1.5x Jetsam 默认值。
-6. 3.0.34 构建成功只能标记为 `BUILD VERIFIED`；完成安装、月余、正常使用及完整重启/重新月余回归后才能标记为 `DEVICE VERIFIED`。
-
-产物标记：
-
-```text
-THERMAL-NOINJECT-IOS18-18H1
-WATCHDOG-QUARANTINE-IOS18-18H2
-```
-
-### 3.0.34 构建记录
-
-第一轮完整构建 run `33140319490` 在 `jbdomain_watchdog.c` 缺少 `<errno.h>`、无法解析 `EINVAL` 时失败；补齐声明后未改变运行时设计。第二轮完整构建成功：
-
-```text
-source commit: 308db3cb812649006811834e3a6796394488fbd5
-workflow run: 33140458314
-workflow URL: https://github.com/riboly/Dopamine3-RootHide/actions/runs/33140458314
-artifact id: 9673763079
-artifact: roothide-Dopamine-3.0.34-308db3c.tipa
-artifact ZIP size: 54,555,735 bytes
-artifact ZIP SHA-256: 0a88ec7bff3170ef51dda558574b8ca455485e384024590c0d51258785a89057
-TIPA size: 54,590,991 bytes
-TIPA SHA-256: 3508a378c6a3534ddcdec8879c4c17d21e6990153b684e4a41f48f158b49f4fe
-basebin.tar SHA-256: 916b4319df112b6f03001415c1a8a9adf2f25decf848d72027e9c995789a8596
-status: BUILD VERIFIED / DEVICE UNVERIFIED
-```
-
-下载的 artifact ZIP SHA-256 与 GitHub API digest 完全一致。外层 artifact 只含目标 TIPA；TIPA 含 131 项，内嵌 `basebin.tar` 含 31 项，CRC、ZIP 路径安全、tar 路径与链接目标安全检查全部通过。App 标识为 `com.opa334.Dopamine-roothide`，App/basebin 版本均为 3.0.34，basebin `.build` 与 source commit 完全一致。
-
-`libjailbreak.dylib`、`launchdhook.dylib`、`systemhook.dylib` 和 `jbctl` 均包含 arm64 与 arm64e。Dopamine 主可执行文件继续包含 `SANDBOX-KERNCRED-18E1`；basebin 继续包含 `UCRED-SMR-18A5`、`TRUSTCACHE-KALLOC-18B2`、`TRUSTCACHE-PERSIST-18C1`、`TRUSTCACHE-PERSIST-18D1`、`TRUSTFLOW-8A10`、`RESPRING-IOS18-BBD1`、`PERF-NOINJECT-IOS18-18F1`、`NEAGENT-NOINJECT-IOS18-18G1`，并包含新增 `THERMAL-NOINJECT-IOS18-18H1` 与 `WATCHDOG-QUARANTINE-IOS18-18H2`。最终二进制还独立确认了 quarantine 文件路径、launchdhook 提示、jbctl 管理命令和 thermalmonitord 完整路径。
+由于 3.0.35 尚未安装到设备，当前只能标记为 `BUILD PENDING`/`DEVICE UNVERIFIED`。验证时应确认 thermalmonitord 正常运行、CPU/温控插件不再触发 watchdog、Wi-Fi/VPN 不出现回归，并重测 3.0.33 已验证的 trust-cache、Sileo/Zebra、OpenSSH、Frida 和 TrollFools 注入流程。

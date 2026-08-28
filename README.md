@@ -58,24 +58,24 @@ Wi-Fi appear offline. Version 3.0.32 excludes only that complete Apple system
 path on iOS 18. Its Frida settings action uses the 3.0.31 behavior again and
 downloads the RootHide arm64e 17.17.0 DEB when installation is requested;
 there is no bundled Frida package. Version 3.0.33 packages this current source
-and makes manual workflow runs default to a full TIPA build. It is the current
-device-verified stable baseline; the later `thermalmonitord` userspace panic was
-traced to an incompatible CPU/thermal tweak rather than a 3.0.33 core failure.
-Version 3.0.34 protects the complete Apple path `/usr/libexec/thermalmonitord`
-from RootHide/tweak injection and adds a bounded watchdog quarantine for a
-small reviewed set of dedicated Apple services. Quarantine rules can be
-inspected with `jbctl stability quarantine list` and cleared as root with
-`jbctl stability quarantine clear`; clearing does not remove fixed safety
-exclusions. Full Actions run `33140458314` produced the build-verified
-`roothide-Dopamine-3.0.34-308db3c.tipa`; installation and device reboot-cycle
-validation remain pending. Manual Actions run `32981228809` produced
-`roothide-Dopamine-3.0.33-ed8387a.tipa`. Actions run
+and makes manual workflow runs default to a full TIPA build. Manual Actions run
+`32981228809` produced `roothide-Dopamine-3.0.33-ed8387a.tipa`. Actions run
 `32921982914` and artifact
 `roothide-Dopamine-3.0.32-a2619ac.tipa` are `BUILD VERIFIED`. On 2026-08-26,
 the target device completed activation and successfully connected multiple VPN
 tools, confirming the `neagent`/NetworkExtension fix. That artifact predates
 the Frida-only installer reversion. A successful GitHub Actions build only
 establishes that the source compiles and packages correctly.
+
+Version 3.0.34 was rejected by device testing because active-use jank became
+severe and Wi-Fi/VPN sessions repeatedly disconnected and reconnected. Its
+broader watchdog quarantine and shared critical-service module are removed from
+the source. Version 3.0.35 returns to the 3.0.33 runtime design and adds only a
+complete-path iOS 18 no-injection rule for `/usr/libexec/thermalmonitord`,
+preventing the previously observed CPU/thermal tweak watchdog crash without
+adding per-spawn file I/O, quarantine state, or changes to VPN/trust-cache
+behavior. It remains `BUILD PENDING` until the new artifact is built and
+verified.
 
 
 

@@ -1,12 +1,9 @@
 #include "jbserver_global.h"
 
-#include <errno.h>
 #include <stdio.h>
 #include <time.h>
-#include <sys/param.h>
 #include <libjailbreak/util.h>
 #include "../crashreporter.h"
-#include "critical_services.h"
 
 #include <libjailbreak/roothider.h>
 
@@ -21,29 +18,16 @@ static bool watchdog_domain_allowed(audit_token_t clientToken)
 
 static int watchdog_intercept_userspace_panic(const char *panicMessage)
 {
-	if (!panicMessage) return EINVAL;
-	char quarantinedPath[PATH_MAX] = {};
-	int quarantineResult = roothide_critical_service_quarantine_from_watchdog(
-		panicMessage, quarantinedPath, sizeof(quarantinedPath));
-	char *augmentedMessage = NULL;
-	if (quarantineResult == 0) {
-		(void)asprintf(&augmentedMessage,
-			"%s\n\nRootHide stability quarantine: tweak injection will be disabled for %s after this userspace reboot. Run 'jbctl stability quarantine clear' as root to remove this automatic rule.",
-			panicMessage, quarantinedPath);
-	}
-	const char *messageToSave = augmentedMessage ?: panicMessage;
-
 	FILE *outFile = crashreporter_open_outfile("userspace-panic", NULL);
 	if (outFile) {
-		fprintf(outFile, "\n%s", messageToSave);
+		fprintf(outFile, "\n%s", panicMessage);
 		fprintf(outFile, "\n\nThis panic was prevented by Dopamine and a userspace reboot was done instead.");
 		crashreporter_save_outfile(outFile);
 	}
 
-	setenv("WATCHDOG_PANIC_MESSAGE", messageToSave, 1);
-	free(augmentedMessage);
+	setenv("WATCHDOG_PANIC_MESSAGE", panicMessage, 1);
 	FILE *touchFile = fopen(JBROOT_PATH("/basebin/.safe_mode"), "w");
-	if (touchFile) fclose(touchFile);
+	fclose(touchFile);
 
 	return 0;
 }

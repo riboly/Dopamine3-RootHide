@@ -1,6 +1,5 @@
 #include "common.h"
 #include "roothider.h"
-#include "common/critical_services.h"
 #include <xpc/xpc.h>
 #include "launchd.h"
 #include <mach-o/dyld.h>
@@ -64,7 +63,26 @@ void string_enumerate_components(const char *string, const char *separator, void
 
 kSpawnConfig spawn_config_for_executable(const char* path, char *const argv[restrict])
 {
-	if (roothide_critical_service_should_skip_injection(path)) return 0;
+	if (__builtin_available(iOS 18.0, *)) {
+		const char *stockNoInjectServicePaths[] = {
+			"/System/Library/PrivateFrameworks/NanoTimeKit.framework/nanotimekitcompaniond",
+			"/System/Library/Frameworks/Metal.framework/XPCServices/MTLCompilerService.xpc/MTLCompilerService",
+			"/System/Library/Frameworks/AudioToolbox.framework/XPCServices/AudioConverterService.xpc/AudioConverterService",
+			// neagent is Apple's platform-signed NetworkExtension broker. Injecting
+			// systemhook lets TweakLoader load RootHide AutoPatches before a VPN
+			// provider starts; on iOS 18.2.1 that aborts in libroothide rootfs_alloc
+			// and leaves on-demand VPN sessions permanently stuck connecting.
+			"/usr/libexec/neagent",
+			// thermalmonitord is a platform thermal supervisor. On iOS 18,
+			// third-party CPU/thermal tweaks can make it miss sensor check-ins
+			// and trigger a watchdog userspace panic. Keep this one Apple daemon
+			// outside RootHide injection while preserving normal App injection.
+			"/usr/libexec/thermalmonitord",
+		};
+		for (size_t i = 0; i < sizeof(stockNoInjectServicePaths) / sizeof(stockNoInjectServicePaths[0]); i++) {
+			if (!strcmp(stockNoInjectServicePaths[i], path)) return 0;
+		}
+	}
 
 	// Blacklist to ensure general system stability
 	// I don't like this but for some processes it seems neccessary

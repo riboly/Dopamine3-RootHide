@@ -3,7 +3,6 @@
 #import <libjailbreak/jbclient_mach.h>
 #import <libjailbreak/stock_fixes.h>
 #import "internal.h"
-#import "critical_services.h"
 
 #import <Foundation/Foundation.h>
 #import <CoreServices/LSApplicationProxy.h>
@@ -102,7 +101,6 @@ Available commands:\n\
 	trustcache info\t\t\tPrint info about all jailbreak related trustcaches and the cdhashes contained in them\n\
 	trustcache clear\t\tClears current and persistent jailbreak trustcache cdhashes\n\
 	trustcache add /path/to/macho\t\tAdd the cdhash of a macho to the jailbreaks trustcache\n\
-	stability quarantine list|clear\tView or clear watchdog-created no-injection rules\n\
 	trollstore_apps list\t\tList apps installed through TrollStore or TrollStore Lite\n\
 	trollstore_apps uninstall <bundle-id>...\tSafely uninstall marker-validated TrollStore apps\n\
 	update <tipa/basebin> <path>\tInitiates a jailbreak update either based on a TIPA or based on a basebin.tar file, TIPA installation depends on TrollStore, afterwards it triggers a userspace reboot\n");
@@ -251,31 +249,6 @@ int main(int argc, char* argv[])
 	}
 	else if (!strcmp(cmd, "trollstore_apps")) {
 		return trollstore_applications_command(argc, argv);
-	}
-	else if (!strcmp(cmd, "stability")) {
-		if (argc != 4 || strcmp(argv[2], "quarantine") != 0) {
-			print_usage();
-			return EINVAL;
-		}
-		if (!strcmp(argv[3], "list")) {
-			char quarantineEntries[4096] = {};
-			int result = roothide_critical_service_quarantine_copy(quarantineEntries, sizeof(quarantineEntries));
-			if (result != 0) {
-				fprintf(stderr, "Failed reading stability quarantine: %s\n", strerror(result));
-				return result;
-			}
-			printf("%s", quarantineEntries[0] ? quarantineEntries : "No watchdog-created quarantine entries.\n");
-			return 0;
-		}
-		if (!strcmp(argv[3], "clear")) {
-			if (getuid() != 0) {
-				fprintf(stderr, "ERROR: clearing stability quarantine requires root.\n");
-				return EPERM;
-			}
-			return roothide_critical_service_quarantine_clear();
-		}
-		print_usage();
-		return EINVAL;
 	}
 	else if (!strcmp(cmd, "reboot_userspace")) {
 		return reboot3(RB2_USERREBOOT);

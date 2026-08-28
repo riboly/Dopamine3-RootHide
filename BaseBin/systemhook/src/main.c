@@ -22,8 +22,7 @@ static const char kTrustFlowBuildMarker[] __attribute__((used)) = "TRUSTFLOW-8A1
 static const char kIOS18RespringFixMarker[] __attribute__((used)) = "RESPRING-IOS18-BBD1";
 static const char kIOS18PerformanceMarker[] __attribute__((used)) = "PERF-NOINJECT-IOS18-18F1";
 static const char kIOS18NetworkExtensionMarker[] __attribute__((used)) = "NEAGENT-NOINJECT-IOS18-18G1";
-static const char kIOS18ThermalProtectionMarker[] __attribute__((used)) = "THERMAL-NOINJECT-IOS18-18H1";
-static const char kIOS18WatchdogQuarantineMarker[] __attribute__((used)) = "WATCHDOG-QUARANTINE-IOS18-18H2";
+static const char kIOS18ThermalProtectionMarker[] __attribute__((used)) = "THERMAL-NOINJECT-IOS18-18I1";
 
 static const double kDefaultJetsamMultiplier = 1.5;
 static const uint64_t kJetsamMultiplierCacheTTLNs = 5ULL * 1000ULL * 1000ULL * 1000ULL;
