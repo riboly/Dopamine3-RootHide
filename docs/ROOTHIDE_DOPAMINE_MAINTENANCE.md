@@ -19,7 +19,7 @@
 | 3.0.31 | F1：缩小 iOS 18 高频系统服务注入面、缓存 Jetsam 设置并将默认值降至 1.5× | `DEVICE REJECTED`：发热、卡顿和掉帧明显改善，但重新拉起的 `neagent` 会因 RootHide/TweakLoader 注入在 `rootfs_alloc` 中反复 SIGABRT，导致 VPN 永久卡在连接中并连带表现为 Wi-Fi 无网络 |
 | 3.0.32 | G1：iOS 18 `neagent` 精确豁免；Frida 安装后续恢复为 3.0.31 的联网下载方式 | `DEVICE VERIFIED（VPN 修复）`：月余后多个 VPN 工具均可正常连接；Frida 安装回退未重新构建 |
 | 3.0.33 | H1：打包 Frida 联网安装回退，并将手动工作流默认设为完整构建 | `DEVICE VERIFIED`：长期使用特别稳定；后续 thermalmonitord 故障由新安装的不兼容 CPU/温控 tweak 触发，不是 3.0.33 自身随机回归 |
-| 3.0.34 | H2：iOS 18 thermalmonitord 固定注入保护与受限 watchdog 自动隔离 | `BUILD PENDING`：源码完成后必须经 Actions 完整构建；真机安装、月余和重启回归尚未执行 |
+| 3.0.34 | H2：iOS 18 thermalmonitord 固定注入保护与受限 watchdog 自动隔离 | `BUILD VERIFIED / DEVICE UNVERIFIED`：Actions 完整构建与产物核验通过；真机安装、月余和重启回归尚未执行 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -1231,3 +1231,25 @@ sudo jbctl stability quarantine clear
 THERMAL-NOINJECT-IOS18-18H1
 WATCHDOG-QUARANTINE-IOS18-18H2
 ```
+
+### 3.0.34 构建记录
+
+第一轮完整构建 run `33140319490` 在 `jbdomain_watchdog.c` 缺少 `<errno.h>`、无法解析 `EINVAL` 时失败；补齐声明后未改变运行时设计。第二轮完整构建成功：
+
+```text
+source commit: 308db3cb812649006811834e3a6796394488fbd5
+workflow run: 33140458314
+workflow URL: https://github.com/riboly/Dopamine3-RootHide/actions/runs/33140458314
+artifact id: 9673763079
+artifact: roothide-Dopamine-3.0.34-308db3c.tipa
+artifact ZIP size: 54,555,735 bytes
+artifact ZIP SHA-256: 0a88ec7bff3170ef51dda558574b8ca455485e384024590c0d51258785a89057
+TIPA size: 54,590,991 bytes
+TIPA SHA-256: 3508a378c6a3534ddcdec8879c4c17d21e6990153b684e4a41f48f158b49f4fe
+basebin.tar SHA-256: 916b4319df112b6f03001415c1a8a9adf2f25decf848d72027e9c995789a8596
+status: BUILD VERIFIED / DEVICE UNVERIFIED
+```
+
+下载的 artifact ZIP SHA-256 与 GitHub API digest 完全一致。外层 artifact 只含目标 TIPA；TIPA 含 131 项，内嵌 `basebin.tar` 含 31 项，CRC、ZIP 路径安全、tar 路径与链接目标安全检查全部通过。App 标识为 `com.opa334.Dopamine-roothide`，App/basebin 版本均为 3.0.34，basebin `.build` 与 source commit 完全一致。
+
+`libjailbreak.dylib`、`launchdhook.dylib`、`systemhook.dylib` 和 `jbctl` 均包含 arm64 与 arm64e。Dopamine 主可执行文件继续包含 `SANDBOX-KERNCRED-18E1`；basebin 继续包含 `UCRED-SMR-18A5`、`TRUSTCACHE-KALLOC-18B2`、`TRUSTCACHE-PERSIST-18C1`、`TRUSTCACHE-PERSIST-18D1`、`TRUSTFLOW-8A10`、`RESPRING-IOS18-BBD1`、`PERF-NOINJECT-IOS18-18F1`、`NEAGENT-NOINJECT-IOS18-18G1`，并包含新增 `THERMAL-NOINJECT-IOS18-18H1` 与 `WATCHDOG-QUARANTINE-IOS18-18H2`。最终二进制还独立确认了 quarantine 文件路径、launchdhook 提示、jbctl 管理命令和 thermalmonitord 完整路径。

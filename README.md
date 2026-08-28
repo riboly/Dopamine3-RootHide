@@ -66,7 +66,9 @@ from RootHide/tweak injection and adds a bounded watchdog quarantine for a
 small reviewed set of dedicated Apple services. Quarantine rules can be
 inspected with `jbctl stability quarantine list` and cleared as root with
 `jbctl stability quarantine clear`; clearing does not remove fixed safety
-exclusions. Manual Actions run `32981228809` produced
+exclusions. Full Actions run `33140458314` produced the build-verified
+`roothide-Dopamine-3.0.34-308db3c.tipa`; installation and device reboot-cycle
+validation remain pending. Manual Actions run `32981228809` produced
 `roothide-Dopamine-3.0.33-ed8387a.tipa`. Actions run
 `32921982914` and artifact
 `roothide-Dopamine-3.0.32-a2619ac.tipa` are `BUILD VERIFIED`. On 2026-08-26,
