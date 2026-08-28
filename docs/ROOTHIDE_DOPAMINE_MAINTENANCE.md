@@ -20,7 +20,7 @@
 | 3.0.32 | G1：iOS 18 `neagent` 精确豁免；Frida 安装后续恢复为 3.0.31 的联网下载方式 | `DEVICE VERIFIED（VPN 修复）`：月余后多个 VPN 工具均可正常连接；Frida 安装回退未重新构建 |
 | 3.0.33 | H1：打包 Frida 联网安装回退，并将手动工作流默认设为完整构建 | `BUILD VERIFIED`：手动 workflow_dispatch 完整构建成功，产物可从 run `32981228809` 下载 |
 | 3.0.34 | H2：thermalmonitord 固定保护、watchdog 自动隔离与共享关键服务模块 | `DEVICE REJECTED`：安装后严重卡顿，Wi-Fi/VPN 频繁断开重连；本版本全部相关代码回退 |
-| 3.0.35 | I1：回到 3.0.33 运行时设计，仅对 `/usr/libexec/thermalmonitord` 做静态完整路径 no-injection | `BUILD PENDING`：等待完整构建；真机安装和重启回归尚未执行 |
+| 3.0.35 | I1：回到 3.0.33 运行时设计，仅对 `/usr/libexec/thermalmonitord` 做静态完整路径 no-injection | `BUILD VERIFIED / DEVICE UNVERIFIED`：完整构建和产物核验通过；真机安装和重启回归尚未执行 |
 
 测试设备基线：iPhone XS Max，iOS 18.2.1。其他系统版本仍需单独验证，不能从该设备结果直接推断。
 
@@ -1168,4 +1168,22 @@ Missing sensor(s): Prs0
 THERMAL-NOINJECT-IOS18-18I1
 ```
 
-由于 3.0.35 尚未安装到设备，当前只能标记为 `BUILD PENDING`/`DEVICE UNVERIFIED`。验证时应确认 thermalmonitord 正常运行、CPU/温控插件不再触发 watchdog、Wi-Fi/VPN 不出现回归，并重测 3.0.33 已验证的 trust-cache、Sileo/Zebra、OpenSSH、Frida 和 TrollFools 注入流程。
+由于 3.0.35 尚未安装到设备，当前只能标记为 `BUILD VERIFIED`/`DEVICE UNVERIFIED`。验证时应确认 thermalmonitord 正常运行、CPU/温控插件不再触发 watchdog、Wi-Fi/VPN 不出现回归，并重测 3.0.33 已验证的 trust-cache、Sileo/Zebra、OpenSSH、Frida 和 TrollFools 注入流程。
+
+### 3.0.35 构建记录
+
+```text
+source commit: e27bb6508b75874d59d1a7cf3f5112d84aa1bb4b
+workflow run: 33143069881
+workflow URL: https://github.com/riboly/Dopamine3-RootHide/actions/runs/33143069881
+artifact id: 9674729542
+artifact: roothide-Dopamine-3.0.35-e27bb65.tipa
+artifact ZIP size: 54,534,713 bytes
+artifact ZIP SHA-256: 4729837c196675e409b7b6cc266a66122f63d589c970eb9395ea6837cc5a1c73
+TIPA size: 54,568,919 bytes
+TIPA SHA-256: 9205bf8ab5c0225f55883791570e867bb7271c1cce606f7d48aab1c17bc19f37
+basebin.tar SHA-256: 677552e94626c390bd19a0b633bfc58377fd3bf7bbfa82590ea90eda0fb8d7fc
+status: BUILD VERIFIED / DEVICE UNVERIFIED
+```
+
+产物核验确认外层 artifact 只含目标 TIPA；TIPA 含 131 项，内嵌 `basebin.tar` 含 31 项，ZIP CRC、ZIP/tar 路径安全和链接目标检查全部通过。App/basebin 版本均为 3.0.35，`.build` 与 source commit 完全一致；`libjailbreak.dylib`、`launchdhook.dylib`、`systemhook.dylib` 和 `jbctl` 均含 arm64/arm64e。既有 credential、trust-cache、respring、性能和 neagent 标记全部保留，新增 `THERMAL-NOINJECT-IOS18-18I1` 存在；3.0.34 的 `WATCHDOG-QUARANTINE-IOS18-18H2`、quarantine 文件路径和 `jbctl stability` 均不存在。
