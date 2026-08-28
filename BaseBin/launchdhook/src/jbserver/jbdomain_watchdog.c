@@ -1,5 +1,6 @@
 #include "jbserver_global.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <time.h>
 #include <sys/param.h>
